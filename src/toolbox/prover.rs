@@ -1,5 +1,5 @@
-use rand::thread_rng;
 
+use rand::{thread_rng, Rng};
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::MultiscalarMul;
