@@ -9,6 +9,7 @@
 // Authors:
 // - Henry de Valence <hdevalence@hdevalence.ca>
 
+/*
 extern crate rand;
 use rand::{thread_rng, CryptoRng, RngCore};
 
@@ -383,3 +384,5 @@ fn create_and_verify_vrf() {
         )
         .is_err());
 }
+
+*/

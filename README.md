@@ -1,7 +1,8 @@
 # zkp: a toolkit for Schnorr proofs
 
 This crate has a toolkit for Schnorr-style zero-knowledge proofs,
-instantiated using the ristretto255 group.
+instantiated using arbitrary elliptic curve group built with [arkworks] 
+(original package uses only ristretto255 group).
 
 It provides two levels of API:
 
@@ -64,14 +65,6 @@ extern crate zkp;
 The `nightly` feature enables nightly-specific features.  It is required
 to build the documentation.
 
-#### Backend selection
-
-`zkp` provides the following pass-through features to select a
-`curve25519-dalek` backend:
-
-* `u32_backend`
-* `u64_backend`
-* `simd_backend`
 
 #### Transcript debugging
 
@@ -99,5 +92,6 @@ While I expect the 1.0 version to be largely unchanged from the current
 code, for now there are no stability guarantees on the proofs, so they
 should not yet be deployed.
 
+[arkworks]: https://arkworks.rs/
 [bellman]: https://github.com/zkcrypto/bellman
 [merlin_blog]: https://medium.com/@hdevalence/merlin-flexible-composable-transcripts-for-zero-knowledge-proofs-28d9fda22d9a

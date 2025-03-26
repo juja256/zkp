@@ -1,8 +1,12 @@
+use std::borrow::BorrowMut;
+use std::marker::PhantomData;
+
 use rand::{thread_rng, Rng};
 
-use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
-use curve25519_dalek::scalar::Scalar;
-use curve25519_dalek::traits::{IsIdentity, VartimeMultiscalarMul};
+use ark_ff::Field;
+use ark_ff::Zero;
+use ark_ec::VariableBaseMSM;
+use ark_ec::AffineRepr;
 
 use crate::toolbox::{SchnorrCS, TranscriptProtocol};
 use crate::util::Matrix;
@@ -27,16 +31,18 @@ use crate::{BatchableProof, ProofError, Transcript};
 ///
 /// Finally, use [`BatchVerifier::verify_batchable`] to consume the
 /// verifier and produce a batch verification result.
-pub struct BatchVerifier<'a> {
+pub struct BatchVerifier<G: AffineRepr, U: TranscriptProtocol<G>, T: BorrowMut<U>> {
+    phantom_u: PhantomData<U>,
+
     batch_size: usize,
-    transcripts: Vec<&'a mut Transcript>,
+    transcripts: Vec<T>,
 
     num_scalars: usize,
 
-    static_points: Vec<CompressedRistretto>,
+    static_points: Vec<G>,
     static_point_labels: Vec<&'static [u8]>,
 
-    instance_points: Vec<Vec<CompressedRistretto>>,
+    instance_points: Vec<Vec<G>>,
     instance_point_labels: Vec<&'static [u8]>,
 
     constraints: Vec<(PointVar, Vec<(ScalarVar, PointVar)>)>,
@@ -55,7 +61,7 @@ pub enum PointVar {
     Instance(usize),
 }
 
-impl<'a> BatchVerifier<'a> {
+impl<G: AffineRepr, U: TranscriptProtocol<G>, T: BorrowMut<U>> BatchVerifier<G, U, T> {
     /// Construct a new batch verifier for the statement with the
     /// given `proof_label`.
     ///
@@ -67,15 +73,16 @@ impl<'a> BatchVerifier<'a> {
     pub fn new(
         proof_label: &'static [u8],
         batch_size: usize,
-        mut transcripts: Vec<&'a mut Transcript>,
+        mut transcripts: Vec<T>,
     ) -> Result<Self, ProofError> {
         if transcripts.len() != batch_size {
             return Err(ProofError::BatchSizeMismatch);
         }
         for i in 0..transcripts.len() {
-            transcripts[i].domain_sep(proof_label);
+            transcripts[i].borrow_mut().domain_sep(proof_label);
         }
         Ok(BatchVerifier {
+            phantom_u: PhantomData,
             batch_size,
             transcripts,
             num_scalars: 0,
@@ -90,7 +97,7 @@ impl<'a> BatchVerifier<'a> {
     /// Allocate a placeholder scalar variable with the given `label`.
     pub fn allocate_scalar(&mut self, label: &'static [u8]) -> ScalarVar {
         for transcript in self.transcripts.iter_mut() {
-            transcript.append_scalar_var(label);
+            transcript.borrow_mut().append_scalar_var(label);
         }
         self.num_scalars += 1;
         ScalarVar(self.num_scalars - 1)
@@ -100,10 +107,10 @@ impl<'a> BatchVerifier<'a> {
     pub fn allocate_static_point(
         &mut self,
         label: &'static [u8],
-        assignment: CompressedRistretto,
+        assignment: G,
     ) -> Result<PointVar, ProofError> {
         for transcript in self.transcripts.iter_mut() {
-            transcript.validate_and_append_point_var(label, &assignment)?;
+            transcript.borrow_mut().validate_and_append_point_var(label, &assignment)?;
         }
         self.static_points.push(assignment);
         self.static_point_labels.push(label);
@@ -115,7 +122,7 @@ impl<'a> BatchVerifier<'a> {
     pub fn allocate_instance_point(
         &mut self,
         label: &'static [u8],
-        assignments: Vec<CompressedRistretto>,
+        assignments: Vec<G>,
     ) -> Result<PointVar, ProofError> {
         if assignments.len() != self.batch_size {
             return Err(ProofError::BatchSizeMismatch);
@@ -124,7 +131,7 @@ impl<'a> BatchVerifier<'a> {
         {
             let it = Iterator::zip(self.transcripts.iter_mut(), assignments.iter());
             for (transcript, assignment) in it {
-                transcript.validate_and_append_point_var(label, &assignment)?;
+                transcript.borrow_mut().validate_and_append_point_var(label, &assignment)?;
             }
         }
         self.instance_points.push(assignments);
@@ -134,7 +141,7 @@ impl<'a> BatchVerifier<'a> {
     }
 
     /// Consume the verifier to produce a verification result.
-    pub fn verify_batchable(mut self, proofs: &[BatchableProof]) -> Result<(), ProofError> {
+    pub fn verify_batchable(mut self, proofs: &[BatchableProof<G>]) -> Result<(), ProofError> {
         if proofs.len() != self.batch_size {
             return Err(ProofError::BatchSizeMismatch);
         }
@@ -155,7 +162,7 @@ impl<'a> BatchVerifier<'a> {
                     PointVar::Static(var_idx) => self.static_point_labels[var_idx],
                     PointVar::Instance(var_idx) => self.instance_point_labels[var_idx],
                 };
-                self.transcripts[j].validate_and_append_blinding_commitment(label, &com)?;
+                self.transcripts[j].borrow_mut().validate_and_append_blinding_commitment(label, &com)?;
             }
         }
 
@@ -163,20 +170,20 @@ impl<'a> BatchVerifier<'a> {
         let minus_c = self
             .transcripts
             .iter_mut()
-            .map(|trans| -trans.get_challenge(b"chal"))
+            .map(|trans| -trans.borrow_mut().get_challenge(b"chal"))
             .collect::<Vec<_>>();
 
         let num_s = self.static_points.len();
         let num_i = self.instance_points.len();
         let num_c = self.constraints.len();
 
-        let mut static_coeffs = vec![Scalar::ZERO; num_s];
-        let mut instance_coeffs = Matrix::<Scalar>::new(num_i + num_c, self.batch_size);
+        let mut static_coeffs = vec![G::ScalarField::zero(); num_s];
+        let mut instance_coeffs = Matrix::<G::ScalarField>::new(num_i + num_c, self.batch_size);
 
         for i in 0..num_c {
             let (ref lhs_var, ref rhs_lc) = self.constraints[i];
             for j in 0..self.batch_size {
-                let random_factor = Scalar::from(thread_rng().gen::<u128>());
+                let random_factor = G::ScalarField::from(thread_rng().gen::<u128>());
 
                 // rand*( sum(P_i, resp_i) - c * Q - Q_com) == 0
 
@@ -214,20 +221,23 @@ impl<'a> BatchVerifier<'a> {
         let flat_instance_points = instance_points
             .iter()
             .flat_map(|inner| inner.iter().cloned())
-            .collect::<Vec<CompressedRistretto>>();
+            .collect::<Vec<G>>();
 
-        let check = RistrettoPoint::optional_multiscalar_mul(
-            static_coeffs
-                .iter()
-                .chain(instance_coeffs.row_major_entries()),
-            self.static_points
-                .iter()
-                .chain(flat_instance_points.iter())
-                .map(|pt| pt.decompress()),
-        )
-        .ok_or(ProofError::VerificationFailure)?;
+        let scalar_coeffs: Vec<_> = static_coeffs
+            .iter()
+            .chain(instance_coeffs.row_major_entries())
+            .cloned()
+            .collect::<Vec<_>>();
+        let points: Vec<_> = self.static_points
+            .iter()
+            .chain(flat_instance_points.iter())
+            .cloned()
+            .collect::<Vec<_>>();
 
-        if check.is_identity() {
+        let check = G::Group::msm(&points[..], &scalar_coeffs[..])
+            .map_err(|_| ProofError::VerificationFailure)?;
+
+        if check.is_zero() {
             Ok(())
         } else {
             Err(ProofError::VerificationFailure)
@@ -235,7 +245,7 @@ impl<'a> BatchVerifier<'a> {
     }
 }
 
-impl<'a> SchnorrCS for BatchVerifier<'a> {
+impl<'a, G: AffineRepr, U: TranscriptProtocol<G>, T: BorrowMut<U>> SchnorrCS for BatchVerifier<G, U, T> {
     type ScalarVar = ScalarVar;
     type PointVar = PointVar;
 

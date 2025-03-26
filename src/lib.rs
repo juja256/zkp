@@ -8,6 +8,7 @@
 //
 // Authors:
 // - Henry de Valence <hdevalence@hdevalence.ca>
+// - Yevhen Hrubiian <grubian.euhen@gmail.com>
 
 #![allow(non_snake_case)]
 #![cfg_attr(feature = "bench", feature(test))]
@@ -26,11 +27,12 @@ extern crate serde;
 #[macro_use]
 pub extern crate serde_derive;
 #[doc(hidden)]
-pub extern crate curve25519_dalek;
-#[doc(hidden)]
 pub extern crate merlin;
 #[doc(hidden)]
 pub extern crate rand;
+
+pub extern crate ark_ec;
+pub extern crate ark_ff;
 
 pub use merlin::Transcript;
 
