@@ -30,7 +30,7 @@ use curve25519_dalek::scalar::Scalar;
 use ark_test_curves::secp256k1::{G1Affine, Fr};
 
 use rand::thread_rng;
-use zkp::toolbox::TranscriptProtocol;
+use zkp::toolbox::standard_transcript::TranscriptProtocol;
 use zkp::toolbox::{batch_verifier::BatchVerifier, prover::Prover, verifier::Verifier, SchnorrCS};
 use zkp::Transcript;
 

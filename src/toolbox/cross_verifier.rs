@@ -1,6 +1,8 @@
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
 use ark_ec::VariableBaseMSM;
+use ark_ff::BigInt;
+use ark_ff::PrimeField;
 use ark_ff::Zero;
 use rand::{thread_rng, Rng};
 use std::borrow::BorrowMut;
@@ -8,13 +10,15 @@ use std::iter;
 use std::marker::PhantomData;
 
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
-use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::{IsIdentity, VartimeMultiscalarMul};
 
-use crate::toolbox::{SchnorrCS, standard_transcript::TranscriptProtocol};
+use crate::toolbox::{SchnorrCS, cross_transcript::TranscriptProtocol};
 use crate::{BatchableProof, CompactProof, ProofError, Transcript};
 
+use super::cross_prover::CompactCrossProof;
+use super::Point;
 use super::PointVar;
+use super::Scalar;
 use super::ScalarVar;
 
 /// Used to produce verification results.
@@ -32,23 +36,31 @@ use super::ScalarVar;
 /// Finally, use [`Verifier::verify_compact`] or
 /// [`Verifier::verify_batchable`] to consume the verifier and produce
 /// a verification result.
-pub struct Verifier<G: AffineRepr, U: TranscriptProtocol<G>, T: BorrowMut<U>> {
+pub struct CrossVerifier<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut<U>, const B_x: usize, const B_c: usize, const B_f: usize> 
+    where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
+          BigInt<4>: From<<G2::ScalarField as PrimeField>::BigInt>,
+          <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>>,
+          <G2::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
     phantom_u: PhantomData<U>,
 
     transcript: T,
     num_scalars: usize,
-    points: Vec<G>,
+    points: Vec<Point<G1, G2>>,
     point_labels: Vec<&'static [u8]>,
     constraints: Vec<(PointVar, Vec<(ScalarVar, PointVar)>)>,
 }
 
-impl<G: AffineRepr, U: TranscriptProtocol<G>, T: BorrowMut<U>> Verifier<G, U, T> {
+impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut<U>, const B_x: usize, const B_c: usize, const B_f: usize> CrossVerifier<G1, G2, U, T, B_x, B_c, B_f>
+    where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
+            BigInt<4>: From<<G2::ScalarField as PrimeField>::BigInt>,
+            <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>>,
+            <G2::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
     /// Construct a verifier for the proof statement with the given
     /// `proof_label`, operating on the given `transcript`.
     pub fn new(proof_label: &'static [u8], mut transcript: T) -> Self {
         //<Transcript as TranscriptProtocol<G>>::domain_sep(transcript.borrow_mut(), proof_label);
         transcript.borrow_mut().domain_sep(proof_label);
-        Verifier {
+        CrossVerifier {
             transcript,
             num_scalars: 0,
             points: Vec::default(),
@@ -70,7 +82,7 @@ impl<G: AffineRepr, U: TranscriptProtocol<G>, T: BorrowMut<U>> Verifier<G, U, T>
     pub fn allocate_point(
         &mut self,
         label: &'static [u8],
-        assignment: G,
+        assignment: Point<G1, G2>,
     ) -> Result<PointVar, ProofError> {
         self.transcript.borrow_mut().validate_and_append_point_var(label, &assignment)?;
         self.points.push(assignment);
@@ -79,29 +91,57 @@ impl<G: AffineRepr, U: TranscriptProtocol<G>, T: BorrowMut<U>> Verifier<G, U, T>
     }
 
     /// Consume the verifier to produce a verification of a [`CompactProof`].
-    pub fn verify_compact(mut self, proof: &CompactProof<G::ScalarField>) -> Result<(), ProofError> {
+    pub fn verify_compact(mut self, proof: &CompactCrossProof<G1::ScalarField, G2::ScalarField>) -> Result<(), ProofError> {
         // Check that there are as many responses as secret variables
         if proof.responses.len() != self.num_scalars {
             return Err(ProofError::VerificationFailure);
         }
 
-        // Decompress all parameters or fail verification.
-        let points = self.points;
-
         // Recompute the prover's commitments based on their claimed challenge value:
-        let minus_c = -proof.challenge;
         for (lhs_var, rhs_lc) in &self.constraints {
-            let commitment = G::Group::msm(
-                rhs_lc
-                    .iter()
-                    .map(|(_sc_var, pt_var)| points[pt_var.0])
-                    .chain(iter::once(points[lhs_var.0])).collect::<Vec<G>>().as_slice(),
-                rhs_lc
-                    .iter()
-                    .map(|(sc_var, _pt_var)| proof.responses[sc_var.0])
-                    .chain(iter::once(minus_c)).collect::<Vec<G::ScalarField>>().as_slice(),
-                ).unwrap()
-                .into_affine();
+            let commitment = match self.points[lhs_var.0] {
+                Point::G1(_) => {
+                    Point::G1(G1::Group::msm(
+                        rhs_lc
+                            .iter()
+                            .map(|(_sc_var, pt_var)| self.points[pt_var.0])
+                            .chain(iter::once(self.points[lhs_var.0]))
+                            .filter_map(|point| if let Point::G1(g1_point) = point { Some(g1_point) } else { None })
+                            .collect::<Vec<G1>>()
+                            .as_slice(),
+                        rhs_lc
+                            .iter()
+                            .map(|(sc_var, _pt_var)| match proof.responses[sc_var.0] {
+                                Scalar::F1(sc) => Ok(sc),
+                                Scalar::F2(sc) => Err(ProofError::VerificationFailure),
+                                Scalar::Cross(sc) => Ok(G1::ScalarField::from_bigint(sc.into()).unwrap()),
+                            })
+                            .chain(iter::once(Ok(-G1::ScalarField::from_bigint(proof.challenge.into()).unwrap())))
+                            .collect::<Result<Vec<G1::ScalarField>, ProofError>>()?
+                            .as_slice(),
+                    ).map_err(|_| ProofError::VerificationFailure)?
+                    .into_affine()
+                    )
+                },
+                Point::G2(_) => {
+                    Point::G2(G2::Group::msm(
+                        rhs_lc
+                            .iter()
+                            .map(|(_sc_var, pt_var)| self.points[pt_var.0])
+                            .chain(iter::once(self.points[lhs_var.0]))
+                            .filter_map(|point| if let Point::G2(g1_point) = point { Some(g1_point) } else { None })
+                            .collect::<Vec<G2>>()
+                            .as_slice(),
+                        rhs_lc
+                            .iter()
+                            .map(|(sc_var, _pt_var)| proof.responses[sc_var.0])
+                            .chain(iter::once(minus_c)).collect::<Vec<G2::ScalarField>>().as_slice(),
+                    ).unwrap()
+                    .into_affine()
+                    )
+                },
+            };
+
 
             self.transcript.borrow_mut().append_blinding_commitment(self.point_labels[lhs_var.0], &commitment);
         }

@@ -8,8 +8,10 @@ use ark_ec::VariableBaseMSM;
 use rand::{thread_rng, Rng};
 use merlin::{TranscriptRng, TranscriptRngBuilder};
 
-use crate::toolbox::{SchnorrCS, TranscriptProtocol};
+use crate::toolbox::{SchnorrCS, standard_transcript::TranscriptProtocol};
 use crate::{BatchableProof, CompactProof, Transcript};
+
+use super::{PointVar, ScalarVar};
 
 /// Used to create proofs.
 ///
@@ -32,13 +34,6 @@ pub struct Prover<G: AffineRepr, U: TranscriptProtocol<G>, T: BorrowMut<U>> {
     point_labels: Vec<&'static [u8]>,
     constraints: Vec<(PointVar, Vec<(ScalarVar, PointVar)>)>,
 }
-
-/// A secret variable used during proving.
-#[derive(Copy, Clone)]
-pub struct ScalarVar(usize);
-/// A public variable used during proving.
-#[derive(Copy, Clone)]
-pub struct PointVar(usize);
 
 impl<G: AffineRepr, U: TranscriptProtocol<G>, T: BorrowMut<U>> Prover<G, U, T> {
     /// Construct a new prover.  The `proof_label` disambiguates proof

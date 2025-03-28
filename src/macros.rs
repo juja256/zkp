@@ -209,7 +209,8 @@ macro_rules! define_proof {
             ) -> (Prover<G, Transcript, &'a mut Transcript>, CompressedPoints<G>) {
                 use self::internal::*;
                 use $crate::toolbox::prover::*;
-
+                use $crate::toolbox::PointVar;
+                
                 let mut prover = Prover::new(PROOF_LABEL.as_bytes(), transcript);
 
                 let secret_vars = SecretVars {
@@ -220,6 +221,8 @@ macro_rules! define_proof {
                         ),
                     )+
                 };
+
+                
 
                 struct VarPointPairs<G: AffineRepr> {
                     $( pub $instance_var: (PointVar, G), )+

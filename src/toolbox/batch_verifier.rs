@@ -8,7 +8,7 @@ use ark_ff::Zero;
 use ark_ec::VariableBaseMSM;
 use ark_ec::AffineRepr;
 
-use crate::toolbox::{SchnorrCS, TranscriptProtocol};
+use crate::toolbox::{SchnorrCS, standard_transcript::TranscriptProtocol};
 use crate::util::Matrix;
 use crate::{BatchableProof, ProofError, Transcript};
 

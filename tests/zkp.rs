@@ -15,15 +15,27 @@
 #[macro_use]
 extern crate zkp;
 
+use std::convert::TryFrom;
+
 use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{Field, UniformRand};
+use ark_serialize::CanonicalDeserialize;
 use ark_test_curves::secp256k1::{Fr, G1Affine};
+use ark_ed25519::EdwardsAffine as ArkEdwardsAffine;
+use curve25519_dalek::RistrettoPoint;
 use rand::thread_rng;
 
 
 use zkp::{BatchableProof, CompactProof, Transcript};
 
-define_proof! {dleq, "Com(x, r1), Com(x, r2) Proof", (x, r1, r2), (A, B, H), (G) : A = (x * G + r1 * H), B = (x * G + r2 * H) }
+fn ristretto_to_ark(point: RistrettoPoint) -> Option<ArkEdwardsAffine> {
+    // Step 1: Compress the RistrettoPoint to get its Edwards representation
+    let compressed = point.compress();
+    let bytes: Vec<u8> = compressed.as_bytes().to_vec();
+    ark_ed25519::EdwardsAffine::deserialize_compressed(&mut std::io::Cursor::new(bytes)).ok()
+}
+
+define_proof! {dleq, "Com(x, r1), Com(x, r2) Proof", (x, r1, r2), (A, B), (G, H) : A = (x * G + r1 * H), B = (x * G + r2 * H) }
 
 #[test]
 fn create_and_verify_compact() {
@@ -100,9 +112,9 @@ fn create_and_verify_batchable() {
             },
         )
     };
-
+    
     let proof_bytes = proof.to_bytes().unwrap();
-    println!("{:?}", proof_bytes);
+    println!("{:?}\n{:?}\n{:?}", proof.commitments, proof.responses, proof_bytes);
     let parsed_proof: dleq::BatchableProof<_> = BatchableProof::from_bytes(&proof_bytes).unwrap();
 
     // Verifier logic
@@ -177,7 +189,7 @@ fn create_batch_and_batch_verify() {
         dleq::BatchVerifyAssignments {
             A: pubkeys,
             B: vrf_outputs,
-            H: vec![H, H, H, H],
+            H: H,
             G: G,
         },
     )

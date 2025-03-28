@@ -8,4 +8,13 @@ pub enum ProofError {
     /// Occurs during batch verification if the batch parameters are mis-sized.
     #[error("Mismatched parameter sizes for batch verification.")]
     BatchSizeMismatch,
+
+    #[error("Cross scalar variable must not exceed b_x bits")]
+    ScalarVarExceedsBound,
+
+    #[error("Point variable assignment mismatch")]
+    PointVarMismatch,
+
+    #[error("Prover aborted")]
+    ProverAborted,
 }

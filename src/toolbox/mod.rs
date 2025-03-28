@@ -38,15 +38,144 @@
 pub mod batch_verifier;
 /// Implements proof creation.
 pub mod prover;
+
+pub mod cross_prover;
 /// Implements proof verification of compact and batchable proofs.
 pub mod verifier;
 
-use ark_ff::Field;
-use ark_ec::AffineRepr;
-use merlin::TranscriptRngBuilder;
+pub mod cross_verifier;
 
+use std::convert::TryInto;
+
+use ark_ff::{BigInt, Field, PrimeField, UniformRand};
+use ark_ec::AffineRepr;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError};
+use merlin::TranscriptRngBuilder;
+use rand::Rng;
+use crate::ark_ff::BigInteger;
 
 use crate::{ProofError, Transcript};
+
+/// A secret variable used during proving.
+#[derive(Copy, Clone)]
+pub struct ScalarVar(usize);
+/// A public variable used during proving.
+#[derive(Copy, Clone)]
+pub struct PointVar(usize);
+
+
+pub enum Point<G1: AffineRepr, G2: AffineRepr> {
+    G1(G1),
+    G2(G2)
+}
+
+impl<G1: AffineRepr, G2: AffineRepr> Point<G1, G2> {
+    pub fn is_zero(&self) -> bool {
+        match self {
+            Point::G1(point) => point.is_zero(),
+            Point::G2(point) => point.is_zero(),
+        }
+    }
+}
+
+impl<G1: AffineRepr, G2: AffineRepr> CanonicalSerialize for Point<G1, G2> {    
+    fn serialize_with_mode<W: std::io::Write>(
+        &self,
+        writer: W,
+        compress: Compress,
+    ) -> Result<(), SerializationError> {
+        match self {
+            Point::G1(point) => point.serialize_with_mode(writer, compress),
+            Point::G2(point) => point.serialize_with_mode(writer, compress)
+        }
+    }
+    
+    fn serialized_size(&self, compress: Compress) -> usize {
+        match self {
+            Point::G1(point) => point.serialized_size(compress),
+            Point::G2(point) => point.serialized_size(compress)
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum Scalar<F1: PrimeField, F2: PrimeField> 
+    where F1::BigInt: Into<BigInt<4>>, 
+          F2::BigInt: Into<BigInt<4>>,
+ {
+    F1(F1),
+    F2(F2),
+    Cross(BigInt<4>)
+}
+
+impl<F1: PrimeField, F2: PrimeField> CanonicalSerialize for Scalar<F1, F2> 
+    where F1::BigInt: Into<BigInt<4>>, 
+          F2::BigInt: Into<BigInt<4>> {
+    fn serialize_with_mode<W: std::io::Write>(
+        &self,
+        mut writer: W,
+        compress: Compress,
+    ) -> Result<(), SerializationError> {
+        match self {
+            Scalar::F1(scalar) => scalar.serialize_with_mode(&mut writer, compress),
+            Scalar::F2(scalar) => scalar.serialize_with_mode(&mut writer, compress),
+            Scalar::Cross(bigint) => bigint.serialize_with_mode(&mut writer, compress),
+        }
+    }
+
+    fn serialized_size(&self, compress: Compress) -> usize {
+        match self {
+            Scalar::F1(scalar) => scalar.serialized_size(compress),
+            Scalar::F2(scalar) => scalar.serialized_size(compress),
+            Scalar::Cross(bigint) => bigint.serialized_size(compress),
+        }
+    }
+}
+
+impl<F1: PrimeField, F2: PrimeField> ark_serialize::Valid for Scalar<F1, F2> 
+    where F1::BigInt: Into<BigInt<4>>, 
+          F2::BigInt: Into<BigInt<4>> {
+    fn check(&self) -> Result<(), SerializationError> {
+        match self {
+            Scalar::F1(scalar) => scalar.check(),
+            Scalar::F2(scalar) => scalar.check(),
+            Scalar::Cross(bigint) => bigint.check(),
+        }
+    }
+}
+
+impl<F1: PrimeField, F2: PrimeField> CanonicalDeserialize for Scalar<F1, F2> 
+    where F1::BigInt: Into<BigInt<4>>, 
+          F2::BigInt: Into<BigInt<4>> {
+    fn deserialize_with_mode<R: std::io::Read>(
+        mut reader: R,
+        compress: Compress,
+        validate: ark_serialize::Validate,
+    ) -> Result<Self, SerializationError> {
+        let tag: u8 = u8::deserialize_with_mode(&mut reader, compress, ark_serialize::Validate::No)?;
+        match tag {
+            0 => Ok(Scalar::F1(F1::deserialize_with_mode(&mut reader, compress, validate)?)),
+            1 => Ok(Scalar::F2(F2::deserialize_with_mode(&mut reader, compress, validate)?)),
+            2 => Ok(Scalar::Cross(BigInt::<4>::deserialize_with_mode(&mut reader, compress, validate)?)),
+            _ => Err(SerializationError::InvalidData),
+        }
+    }
+}
+
+impl<F1: PrimeField, F2: PrimeField> Scalar<F1, F2> 
+    where F1::BigInt: Into<BigInt<4>>, 
+          F2::BigInt: Into<BigInt<4>>,
+ {
+    pub fn into_bigint(&self) -> BigInt<4> {
+            match self {
+                Scalar::F1(scalar) => scalar.into_bigint().into(),
+                Scalar::F2(scalar) => scalar.into_bigint().into(),
+                Scalar::Cross(scalar) => scalar.clone(),
+            }
+        }
+}
+
+type Challenge = BigInt<4>;
 
 /// An interface for specifying proof statements, common between
 /// provers and verifiers.
@@ -98,142 +227,311 @@ pub trait SchnorrCS {
     );
 }
 
-/// This trait defines the wire format for how the constraint system
-/// interacts with the proof transcript.
-pub trait TranscriptProtocol<G: AffineRepr> {
-    /// Appends `label` to the transcript as a domain separator.
-    fn domain_sep(&mut self, label: &'static [u8]);
+pub mod standard_transcript{
+    use ark_ec::AffineRepr;
+    use ark_ff::{Field};
+    use merlin::{Transcript, TranscriptRngBuilder};
 
-    /// Append the `label` for a scalar variable to the transcript.
-    ///
-    /// Note: this does not commit its assignment, which is secret,
-    /// and only serves to bind the proof to the variable allocations.
-    fn append_scalar_var(&mut self, label: &'static [u8]);
+    use crate::ProofError;
 
-    /// Append a point variable to the transcript, for use by a prover.
-    ///
-    /// Returns the compressed point encoding to allow reusing the
-    /// result of the encoding computation; the return value can be
-    /// discarded if it's unused.
-    fn append_point_var(
-        &mut self,
-        label: &'static [u8],
-        point: &G,
-    );
+    /// This trait defines the wire format for how the constraint system
+    /// interacts with the proof transcript.
+    pub trait TranscriptProtocol<G: AffineRepr> {
+        /// Appends `label` to the transcript as a domain separator.
+        fn domain_sep(&mut self, label: &'static [u8]);
 
-    /// Check that point variable is not the identity and
-    /// append it to the transcript, for use by a verifier.
-    ///
-    /// Returns `Ok(())` if the point is not the identity point (and
-    /// therefore generates the full ristretto255 group).
-    ///
-    /// Using this function prevents small-subgroup attacks.
-    fn validate_and_append_point_var(
-        &mut self,
-        label: &'static [u8],
-        point: &G,
-    ) -> Result<(), ProofError>;
+        /// Append the `label` for a scalar variable to the transcript.
+        ///
+        /// Note: this does not commit its assignment, which is secret,
+        /// and only serves to bind the proof to the variable allocations.
+        fn append_scalar_var(&mut self, label: &'static [u8]);
 
-    /// Append a blinding factor commitment to the transcript, for use by
-    /// a prover.
-    ///
-    /// Returns the compressed point encoding to allow reusing the
-    /// result of the encoding computation; the return value can be
-    /// discarded if it's unused.
-    fn append_blinding_commitment(
-        &mut self,
-        label: &'static [u8],
-        point: &G,
-    );
+        /// Append a point variable to the transcript, for use by a prover.
+        ///
+        /// Returns the compressed point encoding to allow reusing the
+        /// result of the encoding computation; the return value can be
+        /// discarded if it's unused.
+        fn append_point_var(
+            &mut self,
+            label: &'static [u8],
+            point: &G,
+        );
 
-    /// Check that a blinding factor commitment is not the identity and
-    /// commit it to the transcript, for use by a verifier.
-    ///
-    /// Returns `Ok(())` if the point is not the identity point (and
-    /// therefore generates the full ristretto255 group).
-    ///
-    /// Using this function prevents small-subgroup attacks.
-    fn validate_and_append_blinding_commitment(
-        &mut self,
-        label: &'static [u8],
-        point: &G,
-    ) -> Result<(), ProofError>;
+        /// Check that point variable is not the identity and
+        /// append it to the transcript, for use by a verifier.
+        ///
+        /// Returns `Ok(())` if the point is not the identity point (and
+        /// therefore generates the full ristretto255 group).
+        ///
+        /// Using this function prevents small-subgroup attacks.
+        fn validate_and_append_point_var(
+            &mut self,
+            label: &'static [u8],
+            point: &G,
+        ) -> Result<(), ProofError>;
 
-    fn build_rng(&self) -> TranscriptRngBuilder;
-    
-    /// Get a scalar challenge from the transcript.
-    fn get_challenge(&mut self, label: &'static [u8]) -> G::ScalarField;
+        /// Append a blinding factor commitment to the transcript, for use by
+        /// a prover.
+        ///
+        /// Returns the compressed point encoding to allow reusing the
+        /// result of the encoding computation; the return value can be
+        /// discarded if it's unused.
+        fn append_blinding_commitment(
+            &mut self,
+            label: &'static [u8],
+            point: &G,
+        );
+
+        /// Check that a blinding factor commitment is not the identity and
+        /// commit it to the transcript, for use by a verifier.
+        ///
+        /// Returns `Ok(())` if the point is not the identity point (and
+        /// therefore generates the full ristretto255 group).
+        ///
+        /// Using this function prevents small-subgroup attacks.
+        fn validate_and_append_blinding_commitment(
+            &mut self,
+            label: &'static [u8],
+            point: &G,
+        ) -> Result<(), ProofError>;
+
+        fn build_rng(&self) -> TranscriptRngBuilder;
+
+        /// Get a scalar challenge from the transcript.
+        fn get_challenge(&mut self, label: &'static [u8]) -> G::ScalarField;
+    }
+
+    impl<G: AffineRepr> TranscriptProtocol<G> for Transcript {
+        fn domain_sep(&mut self, label: &'static [u8]) {
+            self.append_message(b"dom-sep", b"schnorrzkp/1.0/ristretto255");
+            self.append_message(b"dom-sep", label);
+        }
+
+        fn append_scalar_var(&mut self, label: &'static [u8]) {
+            self.append_message(b"scvar", label);
+        }
+
+        fn append_point_var(
+            &mut self,
+            label: &'static [u8],
+            point: &G,
+        ) {
+            let mut bytes = Vec::new();
+            point.serialize_uncompressed(&mut bytes).unwrap();
+            self.append_message(b"ptvar", label);
+            self.append_message(b"val", &bytes);
+        }
+
+        fn validate_and_append_point_var(
+            &mut self,
+            label: &'static [u8],
+            point: &G,
+        ) -> Result<(), ProofError> {
+            if point.is_zero() {
+                return Err(ProofError::VerificationFailure);
+            }
+            let mut bytes = Vec::new();
+            point.serialize_uncompressed(&mut bytes).unwrap();
+            self.append_message(b"ptvar", label);
+            self.append_message(b"val", &bytes);
+            Ok(())
+        }
+
+        fn append_blinding_commitment(
+            &mut self,
+            label: &'static [u8],
+            point: &G,
+        ) {
+            let mut bytes = Vec::new();
+            point.serialize_uncompressed(&mut bytes).unwrap();
+            self.append_message(b"blindcom", label);
+            self.append_message(b"val", &bytes);
+        }
+
+        fn validate_and_append_blinding_commitment(
+            &mut self,
+            label: &'static [u8],
+            point: &G,
+        ) -> Result<(), ProofError> {
+            if point.is_zero() {
+                return Err(ProofError::VerificationFailure);
+            }
+            let mut bytes = Vec::new();
+            point.serialize_uncompressed(&mut bytes).unwrap();
+            self.append_message(b"blindcom", label);
+            self.append_message(b"val", &bytes);
+            Ok(())
+        }
+
+        fn build_rng(&self) -> TranscriptRngBuilder {
+            self.build_rng()    
+        }
+
+        fn get_challenge(&mut self, label: &'static [u8]) -> G::ScalarField {
+            let mut bytes = [0; 64];
+            self.challenge_bytes(label, &mut bytes);
+            G::ScalarField::from_random_bytes(&bytes).unwrap()
+        }
+    }
+
 }
 
-impl<G: AffineRepr> TranscriptProtocol<G> for Transcript {
-    fn domain_sep(&mut self, label: &'static [u8]) {
-        self.append_message(b"dom-sep", b"schnorrzkp/1.0/ristretto255");
-        self.append_message(b"dom-sep", label);
+pub mod cross_transcript{
+    use std::{convert::TryInto, io::Chain};
+
+    use ark_ec::AffineRepr;
+    use ark_ff::BigInt;
+    use ark_serialize::CanonicalSerialize;
+    use merlin::{Transcript, TranscriptRngBuilder};
+
+    use crate::ProofError;
+
+    use super::{Challenge, Point};
+
+    /// This trait defines the wire format for how the constraint system
+    /// interacts with the proof transcript.
+    pub trait TranscriptProtocol<G1: AffineRepr + CanonicalSerialize, G2: AffineRepr + CanonicalSerialize> {
+        /// Appends `label` to the transcript as a domain separator.
+        fn domain_sep(&mut self, label: &'static [u8]);
+
+        /// Append the `label` for a scalar variable to the transcript.
+        ///
+        /// Note: this does not commit its assignment, which is secret,
+        /// and only serves to bind the proof to the variable allocations.
+        fn append_scalar_var(&mut self, label: &'static [u8]);
+
+        /// Append a point variable to the transcript, for use by a prover.
+        ///
+        /// Returns the compressed point encoding to allow reusing the
+        /// result of the encoding computation; the return value can be
+        /// discarded if it's unused.
+        fn append_point_var(
+            &mut self,
+            label: &'static [u8],
+            point: &Point<G1, G2>,
+        );
+
+        /// Check that point variable is not the identity and
+        /// append it to the transcript, for use by a verifier.
+        ///
+        /// Returns `Ok(())` if the point is not the identity point (and
+        /// therefore generates the full ristretto255 group).
+        ///
+        /// Using this function prevents small-subgroup attacks.
+        fn validate_and_append_point_var(
+            &mut self,
+            label: &'static [u8],
+            point: &Point<G1, G2>,
+        ) -> Result<(), ProofError>;
+
+        /// Append a blinding factor commitment to the transcript, for use by
+        /// a prover.
+        ///
+        /// Returns the compressed point encoding to allow reusing the
+        /// result of the encoding computation; the return value can be
+        /// discarded if it's unused.
+        fn append_blinding_commitment(
+            &mut self,
+            label: &'static [u8],
+            point: &Point<G1, G2>,
+        );
+
+        /// Check that a blinding factor commitment is not the identity and
+        /// commit it to the transcript, for use by a verifier.
+        ///
+        /// Returns `Ok(())` if the point is not the identity point (and
+        /// therefore generates the full ristretto255 group).
+        ///
+        /// Using this function prevents small-subgroup attacks.
+        fn validate_and_append_blinding_commitment(
+            &mut self,
+            label: &'static [u8],
+            point: &Point<G1, G2>,
+        ) -> Result<(), ProofError>;
+
+        fn build_rng(&self) -> TranscriptRngBuilder;
+
+        /// Get a scalar challenge from the transcript.
+        fn get_challenge(&mut self, label: &'static [u8], size: usize) -> Challenge;
     }
 
-    fn append_scalar_var(&mut self, label: &'static [u8]) {
-        self.append_message(b"scvar", label);
-    }
-
-    fn append_point_var(
-        &mut self,
-        label: &'static [u8],
-        point: &G,
-    ) {
-        let mut bytes = Vec::new();
-        point.serialize_uncompressed(&mut bytes).unwrap();
-        self.append_message(b"ptvar", label);
-        self.append_message(b"val", &bytes);
-    }
-
-    fn validate_and_append_point_var(
-        &mut self,
-        label: &'static [u8],
-        point: &G,
-    ) -> Result<(), ProofError> {
-        if point.is_zero() {
-            return Err(ProofError::VerificationFailure);
+    impl<G1: AffineRepr + CanonicalSerialize, G2: AffineRepr + CanonicalSerialize> TranscriptProtocol<G1, G2> for Transcript {
+        fn domain_sep(&mut self, label: &'static [u8]) {
+            self.append_message(b"dom-sep", b"schnorrzkp/1.0/ristretto255");
+            self.append_message(b"dom-sep", label);
         }
-        let mut bytes = Vec::new();
-        point.serialize_uncompressed(&mut bytes).unwrap();
-        self.append_message(b"ptvar", label);
-        self.append_message(b"val", &bytes);
-        Ok(())
-    }
 
-    fn append_blinding_commitment(
-        &mut self,
-        label: &'static [u8],
-        point: &G,
-    ) {
-        let mut bytes = Vec::new();
-        point.serialize_uncompressed(&mut bytes).unwrap();
-        self.append_message(b"blindcom", label);
-        self.append_message(b"val", &bytes);
-    }
-
-    fn validate_and_append_blinding_commitment(
-        &mut self,
-        label: &'static [u8],
-        point: &G,
-    ) -> Result<(), ProofError> {
-        if point.is_zero() {
-            return Err(ProofError::VerificationFailure);
+        fn append_scalar_var(&mut self, label: &'static [u8]) {
+            self.append_message(b"scvar", label);
         }
-        let mut bytes = Vec::new();
-        point.serialize_uncompressed(&mut bytes).unwrap();
-        self.append_message(b"blindcom", label);
-        self.append_message(b"val", &bytes);
-        Ok(())
+
+        fn append_point_var(
+            &mut self,
+            label: &'static [u8],
+            point: &Point<G1, G2>,
+        ) {
+            let mut bytes = Vec::new();
+            point.serialize_uncompressed(&mut bytes).unwrap();
+            self.append_message(b"ptvar", label);
+            self.append_message(b"val", &bytes);
+        }
+
+        fn validate_and_append_point_var(
+            &mut self,
+            label: &'static [u8],
+            point: &Point<G1, G2>,
+        ) -> Result<(), ProofError> {
+            if point.is_zero() {
+                return Err(ProofError::VerificationFailure);
+            }
+            let mut bytes = Vec::new();
+            point.serialize_uncompressed(&mut bytes).unwrap();
+            self.append_message(b"ptvar", label);
+            self.append_message(b"val", &bytes);
+            Ok(())
+        }
+
+        fn append_blinding_commitment(
+            &mut self,
+            label: &'static [u8],
+            point: &Point<G1, G2>,
+        ) {
+            let mut bytes = Vec::new();
+            point.serialize_uncompressed(&mut bytes).unwrap();
+            self.append_message(b"blindcom", label);
+            self.append_message(b"val", &bytes);
+        }
+
+        fn validate_and_append_blinding_commitment(
+            &mut self,
+            label: &'static [u8],
+            point: &Point<G1, G2>,
+        ) -> Result<(), ProofError> {
+            if point.is_zero() {
+                return Err(ProofError::VerificationFailure);
+            }
+            let mut bytes = Vec::new();
+            point.serialize_uncompressed(&mut bytes).unwrap();
+            self.append_message(b"blindcom", label);
+            self.append_message(b"val", &bytes);
+            Ok(())
+        }
+
+        fn build_rng(&self) -> TranscriptRngBuilder {
+            self.build_rng()    
+        }
+
+        fn get_challenge(&mut self, label: &'static [u8], size: usize) -> Challenge {
+            let mut bytes = [0; 64];
+            self.challenge_bytes(label, &mut bytes[..size]);
+
+            BigInt::new([
+                u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
+                u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+                u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
+                u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
+            ])
+        }
     }
 
-    fn build_rng(&self) -> TranscriptRngBuilder {
-        self.build_rng()    
-    }
-
-    fn get_challenge(&mut self, label: &'static [u8]) -> G::ScalarField {
-        let mut bytes = [0; 64];
-        self.challenge_bytes(label, &mut bytes);
-        G::ScalarField::from_random_bytes(&bytes).unwrap()
-    }
 }
