@@ -22,7 +22,7 @@ exclude = [
 features = ["nightly"]
 
 [dependencies]
-merlin = "3.0.0"
+merlin = { version = "3.0.0", features = ["debug-transcript"] }
 rand = "0.8.5"
 rand_core = "0.6.4"
 serde = { version = "1.0", features = ["derive"] }
@@ -37,6 +37,7 @@ group = {version = "0.13.0"}
 ark-ff = "0.5.0"
 ark-test-curves = { version = "0.5.0", features = ["secp256k1"] }
 ark-ed25519 = "0.5.0"
+ark-secq256k1 = "0.5.0"
 
 [dev-dependencies]
 bincode = "1"

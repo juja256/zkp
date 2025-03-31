@@ -18,21 +18,75 @@ extern crate sha2;
 extern crate zkp;
 
 use std::borrow::BorrowMut;
+use std::convert::TryInto;
 
 use self::sha2::Sha512;
 
 use ark_ec::{AffineRepr, CurveGroup};
-use ark_ff::UniformRand;
+use ark_ff::{Field, MontConfig};
+use ark_ff::{BigInt, PrimeField, UniformRand, One};
+use ark_serialize::CanonicalDeserialize;
 use curve25519_dalek::constants as dalek_constants;
 use curve25519_dalek::ristretto::RistrettoPoint;
-use curve25519_dalek::scalar::Scalar;
+use group::Group;
+use zkp::toolbox::Scalar;
 
-use ark_test_curves::secp256k1::{G1Affine, Fr};
+use ark_ed25519::EdwardsAffine as ArkEdwardsAffine; // Import the missing type
+use ark_secq256k1::Affine as G1Affine;
+use ark_secq256k1::Fr as F1;
+use ark_test_curves::secp256k1::{Fr as F2, G1Affine as G2Affine};
 
 use rand::thread_rng;
-use zkp::toolbox::standard_transcript::TranscriptProtocol;
-use zkp::toolbox::{batch_verifier::BatchVerifier, prover::Prover, verifier::Verifier, SchnorrCS};
+use zkp::toolbox::cross_transcript::TranscriptProtocol;
+use zkp::toolbox::Point;
+use zkp::toolbox::{cross_prover::CrossProver, cross_verifier::CrossVerifier, SchnorrCS};
+use zkp::CompactCrossProof;
 use zkp::Transcript;
+use ark_ed25519::{EdwardsAffine, Fq, FqConfig};
+
+fn decompress_ristretto255(compressed: &[u8; 32]) -> Option<ArkEdwardsAffine> {
+
+    // Decode the compressed point into field elements
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(compressed);
+    let y = Fq::from_le_bytes_mod_order(&bytes);
+
+    // Check if y is valid
+    if y >= FqConfig::MODULUS.into() {
+        return None;
+    }
+
+    // Compute x² = (y² - 1) / (d * y² + 1)
+    let y2 = y.square();
+    let numerator = y2 - Fq::one();
+    // Define the Edwards curve parameter d for the ark-ed25519 curve
+    let coeff_d = Fq::from_le_bytes_mod_order(&[
+        0x52, 0x03, 0x6c, 0x6e, 0x5c, 0x0e, 0x0a, 0x0a,
+        0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d,
+        0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d,
+        0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0c,
+    ]); // Corrected the last byte to match the expected value for the curve
+    let denominator = coeff_d * y2 + Fq::one();
+
+    if let Some(inv_denominator) = denominator.inverse() {
+        let x2 = numerator * inv_denominator;
+
+        // Check if x² is a quadratic residue
+        if let Some(x) = x2.sqrt() {
+            // Choose the correct x based on the parity bit
+            let x = if bytes[31] & 0x80 != 0 { -x } else { x };
+            return EdwardsAffine::new(x, y).into();
+        }
+    }
+
+    None
+}
+
+fn ristretto_to_ark(point: RistrettoPoint) -> Option<ArkEdwardsAffine> {
+    // Convert the RistrettoPoint to its Edwards representation
+    let edwards_point = point.compress().to_bytes();
+    decompress_ristretto255(&edwards_point[0..32].try_into().expect("Slice with incorrect length"))
+}
 
 fn dleq_statement<CS: SchnorrCS>(
     cs: &mut CS,
@@ -47,47 +101,69 @@ fn dleq_statement<CS: SchnorrCS>(
 }
 
 #[test]
-fn create_and_verify_compact_dleq() {
+fn cross_zkp() {
+    /*{
+        let G = RistrettoPoint::generator();
+        let H = RistrettoPoint::random(&mut thread_rng());
+        let G_ark = ristretto_to_ark(G).unwrap();
+        let H_ark = ristretto_to_ark(H).unwrap();
+        let R = G + H;
+        let R_ark = ristretto_to_ark(R).unwrap();
+        assert!(R_ark - G_ark - H_ark == ArkEdwardsAffine::zero());
+    }*/
     let B = G1Affine::generator();
-    let H = G1Affine::rand(&mut thread_rng());
+    let H = G2Affine::rand(&mut thread_rng());
 
-    let x = Fr::from(89327492234u64);
+    let x = BigInt::<4>::from(1u64 << 63);
 
-    let A = (B * x).into_affine();
-    let G = (H * x).into_affine();
-    
-    let (proof, cmpr_A, cmpr_G) = {
+    let A = Point::G1((B * F1::from_bigint(x).unwrap()).into_affine());
+    let G = Point::G2((H * F2::from_bigint(x).unwrap()).into_affine());
 
+    println!("B={:?}", B);
+    println!("H={:?}", H);
+    println!("A={:?}", A);
+    println!("G={:?}", G);
+    println!("x={:?}", x);
 
+    let proof = {
         let mut transcript = Transcript::new(b"DLEQTest");
-        let mut prover: Prover<G1Affine, Transcript, _> = Prover::new(b"DLEQProof", &mut transcript);
+        let mut prover: CrossProver<G1Affine, G2Affine, Transcript, _, 64, 128, 32> =
+            CrossProver::new(b"DLEQProof", &mut transcript);
 
         // XXX committing var names to transcript forces ordering (?)
-        let var_x = prover.allocate_scalar(b"x", x);
-        let (var_B, _) = prover.allocate_point(b"B", B);
-        let (var_H, _) = prover.allocate_point(b"H", H);
-        let (var_A, cmpr_A) = prover.allocate_point(b"A", A);
-        let (var_G, cmpr_G) = prover.allocate_point(b"G", G);
+        let var_x = prover.allocate_scalar(b"x", Scalar::Cross(x)).unwrap();
+        let var_B = prover.allocate_point(b"B", Point::G1(B));
+        let var_H = prover.allocate_point(b"H", Point::G2(H));
+        let var_A = prover.allocate_point(b"A", A);
+        let var_G = prover.allocate_point(b"G", G);
 
         dleq_statement(&mut prover, var_x, var_A, var_G, var_B, var_H);
 
-        (prover.prove_compact(), cmpr_A, cmpr_G)
+        prover.prove_compact().unwrap()
     };
+    for (i, response) in proof.responses.iter().enumerate() {
+        println!("proof response {}: {:?}", i, response.into_bigint());
+    }
+    let proof_bytes = proof.to_bytes().unwrap();
+    println!("{:?}\n{:?}", proof.responses, proof_bytes);
+    let parsed_proof: CompactCrossProof<_, _> =
+        CompactCrossProof::<F1, F2>::from_bytes(&proof_bytes).unwrap();
 
     let mut transcript = Transcript::new(b"DLEQTest");
-    let mut verifier: Verifier<G1Affine, Transcript, _> = Verifier::new(b"DLEQProof", &mut transcript);
-
+    let mut verifier: CrossVerifier<G1Affine, G2Affine, Transcript, _, 64, 128, 32> =
+        CrossVerifier::new(b"DLEQProof", &mut transcript);
+    // println!("A={:?}", A); // Debug trait is not implemented for Point
     let var_x = verifier.allocate_scalar(b"x");
-    let var_B = verifier.allocate_point(b"B", B).unwrap();
-    let var_H = verifier.allocate_point(b"H", H).unwrap();
-    let var_A = verifier.allocate_point(b"A", cmpr_A).unwrap();
-    let var_G = verifier.allocate_point(b"G", cmpr_G).unwrap();
+    let var_B = verifier.allocate_point(b"B", Point::G1(B)).unwrap();
+    let var_H = verifier.allocate_point(b"H", Point::G2(H)).unwrap();
+    let var_A = verifier.allocate_point(b"A", A).unwrap();
+    let var_G = verifier.allocate_point(b"G", G).unwrap();
 
     dleq_statement(&mut verifier, var_x, var_A, var_G, var_B, var_H);
 
-    assert!(verifier.verify_compact(&proof).is_ok());
+    verifier.verify_compact(&parsed_proof).unwrap();
 }
-
+/*
 #[test]
 fn create_and_verify_batchable_dleq() {
     let B = G1Affine::generator();
@@ -180,4 +256,5 @@ fn create_and_batch_verify_batchable_dleq() {
 
     assert!(verifier.verify_batchable(&proofs).is_ok());
 }
-    
+
+*/

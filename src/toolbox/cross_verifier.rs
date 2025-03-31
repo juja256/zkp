@@ -13,9 +13,9 @@ use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 use curve25519_dalek::traits::{IsIdentity, VartimeMultiscalarMul};
 
 use crate::toolbox::{SchnorrCS, cross_transcript::TranscriptProtocol};
+use crate::CompactCrossProof;
 use crate::{BatchableProof, CompactProof, ProofError, Transcript};
 
-use super::cross_prover::CompactCrossProof;
 use super::Point;
 use super::PointVar;
 use super::Scalar;
@@ -132,22 +132,27 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
                             .filter_map(|point| if let Point::G2(g1_point) = point { Some(g1_point) } else { None })
                             .collect::<Vec<G2>>()
                             .as_slice(),
-                        rhs_lc
+                            rhs_lc
                             .iter()
-                            .map(|(sc_var, _pt_var)| proof.responses[sc_var.0])
-                            .chain(iter::once(minus_c)).collect::<Vec<G2::ScalarField>>().as_slice(),
-                    ).unwrap()
+                            .map(|(sc_var, _pt_var)| match proof.responses[sc_var.0] {
+                                Scalar::F2(sc) => Ok(sc),
+                                Scalar::F1(sc) => Err(ProofError::VerificationFailure),
+                                Scalar::Cross(sc) => Ok(G2::ScalarField::from_bigint(sc.into()).unwrap()),
+                            })
+                            .chain(iter::once(Ok(-G2::ScalarField::from_bigint(proof.challenge.into()).unwrap())))
+                            .collect::<Result<Vec<G2::ScalarField>, ProofError>>()?
+                            .as_slice()
+                    ).map_err(|_| ProofError::VerificationFailure)?
                     .into_affine()
                     )
                 },
             };
 
-
             self.transcript.borrow_mut().append_blinding_commitment(self.point_labels[lhs_var.0], &commitment);
         }
 
         // Recompute the challenge and check if it's the claimed one
-        let challenge = self.transcript.borrow_mut().get_challenge(b"chal");
+        let challenge = self.transcript.borrow_mut().get_challenge(b"p-chel", B_c/8);
 
         if challenge == proof.challenge {
             Ok(())
@@ -155,7 +160,7 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
             Err(ProofError::VerificationFailure)
         }
     }
-
+/* 
     /// Consume the verifier to produce a verification of a [`BatchableProof`].
     pub fn verify_batchable(mut self, proof: &BatchableProof<G>) -> Result<(), ProofError> {
         // Check that there are as many responses as secret variables
@@ -207,10 +212,15 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
         } else {
             Err(ProofError::VerificationFailure)
         }
-    }
+    }*/
 }
 
-impl<'a, G: AffineRepr, U: TranscriptProtocol<G>, T: BorrowMut<U>> SchnorrCS for Verifier<G, U, T> {
+impl<'a, G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut<U>, const B_x: usize, const B_c: usize, const B_f: usize> SchnorrCS 
+    for CrossVerifier<G1, G2, U, T, B_x, B_c, B_f>
+    where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
+        BigInt<4>: From<<G2::ScalarField as PrimeField>::BigInt>,
+        <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>>,
+        <G2::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
     type ScalarVar = ScalarVar;
     type PointVar = PointVar;
 

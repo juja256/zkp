@@ -63,7 +63,7 @@ pub struct ScalarVar(usize);
 #[derive(Copy, Clone)]
 pub struct PointVar(usize);
 
-
+#[derive(Copy, Clone, Debug)]
 pub enum Point<G1: AffineRepr, G2: AffineRepr> {
     G1(G1),
     G2(G2)
@@ -98,7 +98,7 @@ impl<G1: AffineRepr, G2: AffineRepr> CanonicalSerialize for Point<G1, G2> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Scalar<F1: PrimeField, F2: PrimeField> 
     where F1::BigInt: Into<BigInt<4>>, 
           F2::BigInt: Into<BigInt<4>>,
@@ -117,14 +117,23 @@ impl<F1: PrimeField, F2: PrimeField> CanonicalSerialize for Scalar<F1, F2>
         compress: Compress,
     ) -> Result<(), SerializationError> {
         match self {
-            Scalar::F1(scalar) => scalar.serialize_with_mode(&mut writer, compress),
-            Scalar::F2(scalar) => scalar.serialize_with_mode(&mut writer, compress),
-            Scalar::Cross(bigint) => bigint.serialize_with_mode(&mut writer, compress),
+            Scalar::F1(scalar) => {
+                0u8.serialize_with_mode(&mut writer, compress)?;
+                scalar.serialize_with_mode(&mut writer, compress)
+            },
+            Scalar::F2(scalar) => {
+                1u8.serialize_with_mode(&mut writer, compress)?;
+                scalar.serialize_with_mode(&mut writer, compress)
+            },
+            Scalar::Cross(bigint) => {
+                2u8.serialize_with_mode(&mut writer, compress)?;
+                bigint.serialize_with_mode(&mut writer, compress)
+            },
         }
     }
 
     fn serialized_size(&self, compress: Compress) -> usize {
-        match self {
+        1 + match self {
             Scalar::F1(scalar) => scalar.serialized_size(compress),
             Scalar::F2(scalar) => scalar.serialized_size(compress),
             Scalar::Cross(bigint) => bigint.serialized_size(compress),
@@ -175,7 +184,7 @@ impl<F1: PrimeField, F2: PrimeField> Scalar<F1, F2>
         }
 }
 
-type Challenge = BigInt<4>;
+pub type Challenge = BigInt<4>;
 
 /// An interface for specifying proof statements, common between
 /// provers and verifiers.
@@ -457,7 +466,7 @@ pub mod cross_transcript{
 
     impl<G1: AffineRepr + CanonicalSerialize, G2: AffineRepr + CanonicalSerialize> TranscriptProtocol<G1, G2> for Transcript {
         fn domain_sep(&mut self, label: &'static [u8]) {
-            self.append_message(b"dom-sep", b"schnorrzkp/1.0/ristretto255");
+            self.append_message(b"dom-sep", b"schnorrcrosszkp/1.0/");
             self.append_message(b"dom-sep", label);
         }
 

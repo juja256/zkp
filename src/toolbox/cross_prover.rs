@@ -10,19 +10,9 @@ use rand::{thread_rng, Rng};
 use merlin::{TranscriptRng, TranscriptRngBuilder};
 
 use crate::toolbox::{SchnorrCS, cross_transcript::TranscriptProtocol};
-use crate::{BatchableProof, CompactProof, ProofError, Transcript};
+use crate::{BatchableProof, CompactCrossProof, CompactProof, ProofError, Transcript};
 
 use super::{Challenge, Point, PointVar, Scalar, ScalarVar};
-
-#[derive(Clone, CanonicalSerialize, CanonicalDeserialize)]
-pub struct CompactCrossProof<F1: PrimeField, F2: PrimeField>  
-    where F1::BigInt: Into<BigInt<4>>, 
-          F2::BigInt: Into<BigInt<4>> {
-    /// The Fiat-Shamir challenge.
-    pub challenge: Challenge,
-    /// The prover's responses, one per secret variable.
-    pub responses: Vec<Scalar<F1, F2>>,
-}
 
 pub struct CrossProver<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut<U>, const B_x: usize, const B_c: usize, const B_f: usize> 
     where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
@@ -50,7 +40,7 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
     /// statements.
     pub fn new(proof_label: &'static [u8], mut transcript: T) -> Self {
         // G1 is smaller than G2
-        assert!(<G1::ScalarField as PrimeField>::MODULUS_BIT_SIZE < <G2::ScalarField as PrimeField>::MODULUS_BIT_SIZE);
+        assert!(<G1::ScalarField as PrimeField>::MODULUS_BIT_SIZE <= <G2::ScalarField as PrimeField>::MODULUS_BIT_SIZE);
         // B_x + B_c + B_f is smaller than G1::ScalarField::MODULUS_BIT_SIZE
         assert!(B_x + B_c + B_f < <G1::ScalarField as PrimeField>::MODULUS_BIT_SIZE as usize);
 
@@ -180,14 +170,21 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
                         Err(ProofError::PointVarMismatch)
                     },
                 Scalar::Cross(scalar) => {
-                    let (s0, s1) = scalar.mul(&challenge);
-                    if !s1.is_zero() {
-                        Err(ProofError::ScalarVarExceedsBound)
-                    } else if BigInt::<4>::from(s0) > BigInt::<4>::from(G1::ScalarField::MODULUS) {
-                        Err(ProofError::ProverAborted)
+                    if let Scalar::Cross(blinding) = b {
+                        let (mut s0, s1) = scalar.mul(&challenge);
+                        if !s1.is_zero() {
+                            return Err(ProofError::ScalarVarExceedsBound)
+                        } 
+                        let carry = s0.add_with_carry(blinding);
+                        if carry || (BigInt::<4>::from(s0) > BigInt::<4>::from(G1::ScalarField::MODULUS)) {
+                            Err(ProofError::ProverAborted)
+                        } else {
+                            Ok(Scalar::Cross(s0))
+                        }
                     } else {
-                        Ok(Scalar::Cross(s0))
+                        Err(ProofError::PointVarMismatch)
                     }
+                    
                 }
                 
             })

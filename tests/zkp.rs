@@ -28,13 +28,6 @@ use rand::thread_rng;
 
 use zkp::{BatchableProof, CompactProof, Transcript};
 
-fn ristretto_to_ark(point: RistrettoPoint) -> Option<ArkEdwardsAffine> {
-    // Step 1: Compress the RistrettoPoint to get its Edwards representation
-    let compressed = point.compress();
-    let bytes: Vec<u8> = compressed.as_bytes().to_vec();
-    ark_ed25519::EdwardsAffine::deserialize_compressed(&mut std::io::Cursor::new(bytes)).ok()
-}
-
 define_proof! {dleq, "Com(x, r1), Com(x, r2) Proof", (x, r1, r2), (A, B), (G, H) : A = (x * G + r1 * H), B = (x * G + r2 * H) }
 
 #[test]

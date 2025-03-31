@@ -17,4 +17,7 @@ pub enum ProofError {
 
     #[error("Prover aborted")]
     ProverAborted,
+
+    #[error("Proof parsing failed")]
+    ParsingFailure,
 }

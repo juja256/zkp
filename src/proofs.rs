@@ -2,7 +2,8 @@ use std::io::Cursor;
 
 use ark_ec::AffineRepr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_ff::PrimeField;
+use ark_ff::{BigInt, PrimeField};
+use crate::toolbox::{Challenge, Scalar};
 
 use crate::ProofError;
 /// A Schnorr proof in compact format.
@@ -26,7 +27,7 @@ pub struct CompactProof<F: PrimeField> {
 impl<F: PrimeField> CompactProof<F> {
     pub fn to_bytes(&self) -> Result<Vec<u8>, ProofError> {
         let mut cursor = Cursor::new(Vec::new());
-        self.serialize_compressed(&mut cursor).map_err(|_| ProofError::VerificationFailure)?;
+        self.serialize_compressed(&mut cursor).map_err(|_| ProofError::ParsingFailure)?;
         Ok(cursor.into_inner())
     }
 
@@ -39,7 +40,7 @@ impl<F: PrimeField> CompactProof<F> {
         if proof.is_ok() {
             Ok(proof.unwrap())
         } else {
-            Err(ProofError::VerificationFailure)
+            Err(ProofError::ParsingFailure)
         }
     }
 }
@@ -59,7 +60,7 @@ pub struct BatchableProof<G: AffineRepr> {
 impl<G: AffineRepr> BatchableProof<G> {
     pub fn to_bytes(&self) -> Result<Vec<u8>, ProofError> {
         let mut cursor = Cursor::new(Vec::new());
-        self.serialize_compressed(&mut cursor).map_err(|_| ProofError::VerificationFailure)?;
+        self.serialize_compressed(&mut cursor).map_err(|_| ProofError::ParsingFailure)?;
         Ok(cursor.into_inner())
     }
 
@@ -72,7 +73,40 @@ impl<G: AffineRepr> BatchableProof<G> {
         if proof.is_ok() {
             Ok(proof.unwrap())
         } else {
-            Err(ProofError::VerificationFailure)
+            Err(ProofError::ParsingFailure)
+        }
+    }
+}
+
+#[derive(Clone, CanonicalSerialize, CanonicalDeserialize)]
+pub struct CompactCrossProof<F1: PrimeField, F2: PrimeField>  
+    where F1::BigInt: Into<BigInt<4>>, 
+          F2::BigInt: Into<BigInt<4>> {
+    /// The Fiat-Shamir challenge.
+    pub challenge: Challenge,
+    /// The prover's responses, one per secret variable.
+    pub responses: Vec<Scalar<F1, F2>>,
+}
+
+impl<F1: PrimeField, F2: PrimeField> CompactCrossProof<F1, F2> 
+    where F1::BigInt: Into<BigInt<4>>, 
+          F2::BigInt: Into<BigInt<4>> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, ProofError> {
+        let mut cursor = Cursor::new(Vec::new());
+        self.serialize_compressed(&mut cursor).map_err(|_| ProofError::ParsingFailure)?;
+        Ok(cursor.into_inner())
+    }
+
+    /// Deserializes the proof from a byte slice.
+    ///
+    /// Returns an error if the byte slice cannot be parsed into a `R1CSProof`.
+    pub fn from_bytes(slice: &[u8]) -> Result<CompactCrossProof<F1, F2>, ProofError> {
+        let mut cursor = Cursor::new(slice);
+        let proof = CompactCrossProof::<F1, F2>::deserialize_compressed(&mut cursor);
+        if proof.is_ok() {
+            Ok(proof.unwrap())
+        } else {
+            Err(ProofError::ParsingFailure)
         }
     }
 }
