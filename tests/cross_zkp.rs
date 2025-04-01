@@ -91,13 +91,17 @@ fn ristretto_to_ark(point: RistrettoPoint) -> Option<ArkEdwardsAffine> {
 fn dleq_statement<CS: SchnorrCS>(
     cs: &mut CS,
     x: CS::ScalarVar,
-    A: CS::PointVar,
-    G: CS::PointVar,
-    B: CS::PointVar,
-    H: CS::PointVar,
+    r1: CS::ScalarVar,
+    r2: CS::ScalarVar,
+    Com1: CS::PointVar,
+    Com2: CS::PointVar,
+    G1: CS::PointVar,
+    H1: CS::PointVar,
+    G2: CS::PointVar,
+    H2: CS::PointVar,
 ) {
-    cs.constrain(A, vec![(x, B)]);
-    cs.constrain(G, vec![(x, H)]);
+    cs.constrain(Com1, vec![(x, G1), (r1, H1)]);
+    cs.constrain(Com2, vec![(x, G2), (r2, H2)]);
 }
 
 #[test]
@@ -111,19 +115,17 @@ fn cross_zkp() {
         let R_ark = ristretto_to_ark(R).unwrap();
         assert!(R_ark - G_ark - H_ark == ArkEdwardsAffine::zero());
     }*/
-    let B = G1Affine::generator();
-    let H = G2Affine::rand(&mut thread_rng());
+    let G1 = G1Affine::generator();
+    let H1 = G1Affine::rand(&mut thread_rng());
+    let G2 = G2Affine::rand(&mut thread_rng());
+    let H2 = G2Affine::rand(&mut thread_rng());
 
     let x = BigInt::<4>::from(1u64 << 63);
+    let r1 = F1::rand(&mut thread_rng());
+    let r2 = F2::rand(&mut thread_rng());
 
-    let A = Point::G1((B * F1::from_bigint(x).unwrap()).into_affine());
-    let G = Point::G2((H * F2::from_bigint(x).unwrap()).into_affine());
-
-    println!("B={:?}", B);
-    println!("H={:?}", H);
-    println!("A={:?}", A);
-    println!("G={:?}", G);
-    println!("x={:?}", x);
+    let Com1 = Point::G1((G1 * F1::from_bigint(x).unwrap() + H1 * r1).into_affine());
+    let Com2 = Point::G2((G2 * F2::from_bigint(x).unwrap() + H2 * r2).into_affine());
 
     let proof = {
         let mut transcript = Transcript::new(b"DLEQTest");
@@ -132,12 +134,27 @@ fn cross_zkp() {
 
         // XXX committing var names to transcript forces ordering (?)
         let var_x = prover.allocate_scalar(b"x", Scalar::Cross(x)).unwrap();
-        let var_B = prover.allocate_point(b"B", Point::G1(B));
-        let var_H = prover.allocate_point(b"H", Point::G2(H));
-        let var_A = prover.allocate_point(b"A", A);
-        let var_G = prover.allocate_point(b"G", G);
+        let var_r1 = prover.allocate_scalar(b"r1", Scalar::F1(r1)).unwrap();
+        let var_r2 = prover.allocate_scalar(b"r2", Scalar::F2(r2)).unwrap();
+        let var_G1 = prover.allocate_point(b"G1", Point::G1(G1));
+        let var_G2 = prover.allocate_point(b"G2", Point::G2(G2));
+        let var_H1 = prover.allocate_point(b"H1", Point::G1(H1));
+        let var_H2 = prover.allocate_point(b"H2", Point::G2(H2));
+        let var_Com1 = prover.allocate_point(b"Com1", Com1);
+        let var_Com2 = prover.allocate_point(b"Com2", Com2);
 
-        dleq_statement(&mut prover, var_x, var_A, var_G, var_B, var_H);
+        dleq_statement(
+            &mut prover,
+            var_x,
+            var_r1,
+            var_r2,
+            var_Com1,
+            var_Com2,
+            var_G1,
+            var_H1,
+            var_G2,
+            var_H2,
+        );
 
         prover.prove_compact().unwrap()
     };
@@ -154,12 +171,27 @@ fn cross_zkp() {
         CrossVerifier::new(b"DLEQProof", &mut transcript);
     // println!("A={:?}", A); // Debug trait is not implemented for Point
     let var_x = verifier.allocate_scalar(b"x");
-    let var_B = verifier.allocate_point(b"B", Point::G1(B)).unwrap();
-    let var_H = verifier.allocate_point(b"H", Point::G2(H)).unwrap();
-    let var_A = verifier.allocate_point(b"A", A).unwrap();
-    let var_G = verifier.allocate_point(b"G", G).unwrap();
+    let var_r1 = verifier.allocate_scalar(b"r1");
+    let var_r2 = verifier.allocate_scalar(b"r2");
+    let var_G1 = verifier.allocate_point(b"G1", Point::G1(G1)).unwrap();
+    let var_G2 = verifier.allocate_point(b"G2", Point::G2(G2)).unwrap();
+    let var_H1 = verifier.allocate_point(b"H1", Point::G1(H1)).unwrap();
+    let var_H2 = verifier.allocate_point(b"H2", Point::G2(H2)).unwrap();
+    let var_Com1 = verifier.allocate_point(b"Com1", Com1).unwrap();
+    let var_Com2 = verifier.allocate_point(b"Com2", Com2).unwrap();
+    dleq_statement(
+        &mut verifier,
+        var_x,
+        var_r1,
+        var_r2,
+        var_Com1,
+        var_Com2,
+        var_G1,
+        var_H1,
+        var_G2,
+        var_H2,
+    );
 
-    dleq_statement(&mut verifier, var_x, var_A, var_G, var_B, var_H);
 
     verifier.verify_compact(&parsed_proof).unwrap();
 }
