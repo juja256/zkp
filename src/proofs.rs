@@ -1,8 +1,10 @@
 use std::io::Cursor;
 
+use bulletproofs::RangeProof;
 use ark_ec::AffineRepr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_ff::{BigInt, PrimeField};
+use curve25519_dalek::ristretto::CompressedRistretto;
 use crate::toolbox::{Challenge, Scalar};
 
 use crate::ProofError;
@@ -86,6 +88,8 @@ pub struct CompactCrossProof<F1: PrimeField, F2: PrimeField>
     pub challenge: Challenge,
     /// The prover's responses, one per secret variable.
     pub responses: Vec<Scalar<F1, F2>>,
+
+    pub range_proof: (RangeProof, Vec<CompressedRistretto>),
 }
 
 impl<F1: PrimeField, F2: PrimeField> CompactCrossProof<F1, F2> 

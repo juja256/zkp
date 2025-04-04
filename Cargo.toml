@@ -30,6 +30,7 @@ serde_derive = "1"
 thiserror = "2.0.12"
 # Disable default features to deselect a backend, then select one below
 curve25519-dalek = { version = "4.1.1", features = ["digest", "rand_core", "serde", "group"] }
+bulletproofs = { version = "5.0.0", git = "https://github.com/zkcrypto/bulletproofs", features = ["yoloproofs"] }
 ark-ec = "0.5.0"
 ark-serialize = "0.5.0"
 ark-std = "0.5.0"

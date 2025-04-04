@@ -22,19 +22,20 @@ use std::convert::TryInto;
 
 use self::sha2::Sha512;
 
+use ark_ec::twisted_edwards::TECurveConfig;
 use ark_ec::{AffineRepr, CurveGroup};
-use ark_ff::{Field, MontConfig};
+use ark_ff::{BigInteger, Field, MontConfig, Zero};
 use ark_ff::{BigInt, PrimeField, UniformRand, One};
 use ark_serialize::CanonicalDeserialize;
-use curve25519_dalek::constants as dalek_constants;
-use curve25519_dalek::ristretto::RistrettoPoint;
+use curve25519_dalek::{constants as dalek_constants, edwards};
+use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 use group::Group;
 use zkp::toolbox::Scalar;
 
-use ark_ed25519::EdwardsAffine as ArkEdwardsAffine; // Import the missing type
-use ark_secq256k1::Affine as G1Affine;
-use ark_secq256k1::Fr as F1;
-use ark_test_curves::secp256k1::{Fr as F2, G1Affine as G2Affine};
+use ark_ed25519::EdwardsAffine as ArkEdwardsAffine;
+use ark_secq256k1::Affine as G2Affine;
+use ark_secq256k1::Fr as F2;
+//use ark_test_curves::secp256k1::{Fr as F2, G1Affine as G2Affine};
 
 use rand::thread_rng;
 use zkp::toolbox::cross_transcript::TranscriptProtocol;
@@ -42,44 +43,44 @@ use zkp::toolbox::Point;
 use zkp::toolbox::{cross_prover::CrossProver, cross_verifier::CrossVerifier, SchnorrCS};
 use zkp::CompactCrossProof;
 use zkp::Transcript;
-use ark_ed25519::{EdwardsAffine, Fq, FqConfig};
+use ark_ed25519::{EdwardsAffine as G1Affine, Fr as F1, Fq, FqConfig, EdwardsConfig};
+
+fn is_negative(x: &Fq) -> bool {
+    x.into_bigint().to_bytes_le()[0] & 1 == 1
+}
 
 fn decompress_ristretto255(compressed: &[u8; 32]) -> Option<ArkEdwardsAffine> {
-
+    //CompressedRistretto::decompress(&self)
     // Decode the compressed point into field elements
     let mut bytes = [0u8; 32];
     bytes.copy_from_slice(compressed);
-    let y = Fq::from_le_bytes_mod_order(&bytes);
+    let s = Fq::from_le_bytes_mod_order(&bytes);
 
-    // Check if y is valid
-    if y >= FqConfig::MODULUS.into() {
+    // Check if the least significant bit of s is 1
+    if is_negative(&s) {
         return None;
     }
+    let a = EdwardsConfig::COEFF_A;
+    let d = EdwardsConfig::COEFF_D;
+    
+    // y = (1 + a * s²) / (1 - a * s²)
+    let y = ( Fq::ONE + a * s.square() ) / ( Fq::ONE - a * s.square() );
 
-    // Compute x² = (y² - 1) / (d * y² + 1)
-    let y2 = y.square();
-    let numerator = y2 - Fq::one();
-    // Define the Edwards curve parameter d for the ark-ed25519 curve
-    let coeff_d = Fq::from_le_bytes_mod_order(&[
-        0x52, 0x03, 0x6c, 0x6e, 0x5c, 0x0e, 0x0a, 0x0a,
-        0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d,
-        0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d,
-        0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0d, 0x0c,
-    ]); // Corrected the last byte to match the expected value for the curve
-    let denominator = coeff_d * y2 + Fq::one();
-
-    if let Some(inv_denominator) = denominator.inverse() {
-        let x2 = numerator * inv_denominator;
-
-        // Check if x² is a quadratic residue
-        if let Some(x) = x2.sqrt() {
-            // Choose the correct x based on the parity bit
-            let x = if bytes[31] & 0x80 != 0 { -x } else { x };
-            return EdwardsAffine::new(x, y).into();
-        }
+    if y.is_zero() {
+        return None;
     }
-
-    None
+    // x = ((4 * s²) / (a * d * (1 + a * s²)² - (1 - a * s²)²))^(1/2)
+    let x = (( Fq::from(4) * s.square() ) / 
+        ( a*d* (Fq::ONE + a*s.square()).square() - (Fq::ONE - a*s.square()).square()))
+        .sqrt()
+        .map(|x| if is_negative(&x) {-x} else {x} );
+    
+    if x.is_none() || is_negative( &(x.unwrap() * y) ) {
+        return None;
+    } else {
+        let edwards_point = (ArkEdwardsAffine::new_unchecked(x.unwrap(), y) * ark_ed25519::Fr::from(4)).into_affine();
+        Some(edwards_point)
+    }
 }
 
 fn ristretto_to_ark(point: RistrettoPoint) -> Option<ArkEdwardsAffine> {
@@ -106,7 +107,7 @@ fn dleq_statement<CS: SchnorrCS>(
 
 #[test]
 fn cross_zkp() {
-    /*{
+    {
         let G = RistrettoPoint::generator();
         let H = RistrettoPoint::random(&mut thread_rng());
         let G_ark = ristretto_to_ark(G).unwrap();
@@ -114,7 +115,7 @@ fn cross_zkp() {
         let R = G + H;
         let R_ark = ristretto_to_ark(R).unwrap();
         assert!(R_ark - G_ark - H_ark == ArkEdwardsAffine::zero());
-    }*/
+    }
     let G1 = G1Affine::generator();
     let H1 = G1Affine::rand(&mut thread_rng());
     let G2 = G2Affine::rand(&mut thread_rng());
