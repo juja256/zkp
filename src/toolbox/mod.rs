@@ -161,7 +161,7 @@ impl<F1: PrimeField, F2: PrimeField> CanonicalDeserialize for Scalar<F1, F2>
         compress: Compress,
         validate: ark_serialize::Validate,
     ) -> Result<Self, SerializationError> {
-        let tag: u8 = u8::deserialize_with_mode(&mut reader, compress, ark_serialize::Validate::No)?;
+        let tag: u8 = u8::deserialize_with_mode(&mut reader, compress, validate)?;
         match tag {
             0 => Ok(Scalar::F1(F1::deserialize_with_mode(&mut reader, compress, validate)?)),
             1 => Ok(Scalar::F2(F2::deserialize_with_mode(&mut reader, compress, validate)?)),
@@ -176,12 +176,12 @@ impl<F1: PrimeField, F2: PrimeField> Scalar<F1, F2>
           F2::BigInt: Into<BigInt<4>>,
  {
     pub fn into_bigint(&self) -> BigInt<4> {
-            match self {
-                Scalar::F1(scalar) => scalar.into_bigint().into(),
-                Scalar::F2(scalar) => scalar.into_bigint().into(),
-                Scalar::Cross(scalar) => scalar.clone(),
-            }
+        match self {
+            Scalar::F1(scalar) => scalar.into_bigint().into(),
+            Scalar::F2(scalar) => scalar.into_bigint().into(),
+            Scalar::Cross(scalar) => scalar.clone(),
         }
+    }
 }
 
 pub type Challenge = BigInt<4>;

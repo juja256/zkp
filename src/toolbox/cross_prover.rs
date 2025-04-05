@@ -6,6 +6,7 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{BigInt, BigInteger, PrimeField, UniformRand};
 use ark_ec::VariableBaseMSM;
 use ark_serialize::{CanonicalSerialize, CanonicalDeserialize};
+use bulletproofs::{BulletproofGens, PedersenGens};
 use rand::{thread_rng, Rng};
 use merlin::{TranscriptRng, TranscriptRngBuilder};
 
@@ -195,11 +196,32 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
 
     /// Consume this prover to produce a compact proof.
     pub fn prove_compact(self) -> Result<CompactCrossProof<G1::ScalarField, G2::ScalarField>, ProofError> {
+        let pc_gens = PedersenGens::default();
+        let bp_gens = BulletproofGens::new(64, 1);
+
+        let range_proofs = vec![];
+        for sc in self.scalars {
+            if let Scalar::Cross(scalar) = sc {
+                let blinding = curve25519_dalek::scalar::Scalar::random(&mut thread_rng());
+        
+                let (range_proof, committed_value) = bulletproofs::RangeProof::prove_single(
+                    &bp_gens,
+                    &pc_gens,
+                    self.transcript.borrow_mut().borrow_mut(),
+                    scalar.0[0],
+                    &blinding,
+                    B_x,
+                ).map_err(|_| ProofError::ProverAborted)?;
+            }
+        }
+       
+
         let (challenge, responses, _) = self.prove_impl()?;
 
         Ok(CompactCrossProof {
             challenge,
             responses,
+            range_proofs: todo!(),
         })
     }
 }
