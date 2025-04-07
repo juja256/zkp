@@ -45,6 +45,7 @@ bincode = "1"
 sha2 = "0.10.8"
 
 [features]
+rangeproof = []
 nightly = []
 debug-transcript = ["merlin/debug-transcript"]
 bench = []

@@ -149,6 +149,7 @@ pub struct CompactCrossProof<F1: PrimeField, F2: PrimeField>
     pub challenge: Challenge,
     /// The prover's responses, one per secret variable.
     pub responses: Vec<Scalar<F1, F2>>,
+    #[cfg(feature = "rangeproof")]
     /// Range proof for the secret variable.
     pub range_proofs: Vec<RangeProof>,
 }

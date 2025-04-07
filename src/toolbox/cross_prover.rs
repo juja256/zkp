@@ -1,8 +1,10 @@
 
 use std::borrow::BorrowMut;
+use std::convert::TryInto;
 use std::marker::PhantomData;
 
 use ark_ec::{AffineRepr, CurveGroup};
+use ark_ed25519::EdwardsAffine;
 use ark_ff::{BigInt, BigInteger, PrimeField, UniformRand};
 use ark_ec::VariableBaseMSM;
 use ark_serialize::{CanonicalSerialize, CanonicalDeserialize};
@@ -11,8 +13,9 @@ use rand::{thread_rng, Rng};
 use merlin::{TranscriptRng, TranscriptRngBuilder};
 
 use crate::toolbox::{SchnorrCS, cross_transcript::TranscriptProtocol};
-use crate::{BatchableProof, CompactCrossProof, CompactProof, ProofError, Transcript};
+use crate::{BatchableProof, CompactCrossProof, CompactProof, ProofError, RangeProof, Transcript};
 
+use super::dalek_ark::ark_to_ristretto255;
 use super::{Challenge, Point, PointVar, Scalar, ScalarVar};
 
 pub struct CrossProver<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut<U>, const B_x: usize, const B_c: usize, const B_f: usize> 
@@ -194,34 +197,87 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
         Ok((challenge, responses, commitments))
     }
 
+    
     /// Consume this prover to produce a compact proof.
     pub fn prove_compact(self) -> Result<CompactCrossProof<G1::ScalarField, G2::ScalarField>, ProofError> {
-        let pc_gens = PedersenGens::default();
-        let bp_gens = BulletproofGens::new(64, 1);
-
-        let range_proofs = vec![];
-        for sc in self.scalars {
-            if let Scalar::Cross(scalar) = sc {
-                let blinding = curve25519_dalek::scalar::Scalar::random(&mut thread_rng());
-        
-                let (range_proof, committed_value) = bulletproofs::RangeProof::prove_single(
-                    &bp_gens,
-                    &pc_gens,
-                    self.transcript.borrow_mut().borrow_mut(),
-                    scalar.0[0],
-                    &blinding,
-                    B_x,
-                ).map_err(|_| ProofError::ProverAborted)?;
-            }
-        }
-       
-
         let (challenge, responses, _) = self.prove_impl()?;
 
         Ok(CompactCrossProof {
             challenge,
             responses,
-            range_proofs: todo!(),
+        })
+    }
+}
+
+#[cfg(feature = "rangeproof")]
+macro_rules! cast {
+    ($target: expr, $pat: path) => {
+        {
+            if let $pat(a) = $target { // #1
+                a
+            } else {
+                panic!(
+                    "mismatch variant when cast to {}", 
+                    stringify!($pat)); // #2
+            }
+        }
+    };
+}
+
+#[cfg(feature = "rangeproof")]
+impl<G1: AffineRepr, U: TranscriptProtocol<G1, EdwardsAffine>, T: BorrowMut<U>, const B_x: usize, const B_c: usize, const B_f: usize> 
+    CrossProver<G1, EdwardsAffine, U, T, B_x, B_c, B_f> 
+    where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>,
+          <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
+    
+    pub fn get_range_proofs(&mut self) -> Result<Vec<RangeProof>, ProofError> {
+        let bp_gens = BulletproofGens::new(B_x, 1);
+        let mut range_proofs = vec![];
+        for (i, sc) in self.scalars.iter().enumerate() {
+            // find blinder in Pedersen commitment so that Com(x) = [x]G + [r]H
+            if let Scalar::Cross(x) = sc {
+                let (Com, G, H, sc) = self.constraints.iter().find_map(|(lhs_var, rhs_lc)| {
+                    if let Point::G2(_) = self.points[lhs_var.0] {
+                        if rhs_lc.len() == 2 && rhs_lc[0].0.0 == i {
+                            Some((self.points[lhs_var.0], self.points[rhs_lc[0].1.0], self.points[rhs_lc[1].1.0], self.scalars[rhs_lc[1].0.0].clone() ))
+                        } else if rhs_lc.len() == 2 && rhs_lc[1].0.0 == i {
+                            Some((self.points[lhs_var.0], self.points[rhs_lc[1].1.0], self.points[rhs_lc[0].1.0], self.scalars[rhs_lc[0].0.0].clone() ))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }).ok_or(ProofError::ProverAborted)?;
+
+                let (G, H) = (cast!(G, Point::G2), cast!(H, Point::G2));
+                let (range_proof, commitment) = bulletproofs::RangeProof::prove_single(
+                    &bp_gens,
+                    &PedersenGens { B: ark_to_ristretto255(G).unwrap(), B_blinding: ark_to_ristretto255(H).unwrap() },
+                    self.transcript.borrow_mut().as_transcript(),
+                    x.0[0],
+                    &curve25519_dalek::Scalar::from_bytes_mod_order(sc.into_bigint().to_bytes_le()[..].try_into().unwrap()),
+                    B_x,
+                ).map_err(|_| ProofError::ProverAborted)?;
+
+                range_proofs.push(RangeProof {
+                    proof: range_proof,
+                    commitment: commitment,
+                });
+            }
+        }
+        Ok(range_proofs)
+    }
+
+    /// proving equality of two Pedersen commitments to small x in different groups using bulletproofs and https://eprint.iacr.org/2022/1593.pdf
+    pub fn prove_cross(mut self) -> Result<CompactCrossProof<G1::ScalarField, <EdwardsAffine as AffineRepr>::ScalarField>, ProofError> {
+        let mut range_proofs = self.get_range_proofs()?;
+        let (challenge, responses, _) = self.prove_impl()?;
+
+        Ok(CompactCrossProof {
+            challenge,
+            responses,
+            range_proofs,
         })
     }
 }

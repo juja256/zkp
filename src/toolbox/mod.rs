@@ -45,6 +45,8 @@ pub mod verifier;
 
 pub mod cross_verifier;
 
+pub mod dalek_ark;
+
 use std::convert::TryInto;
 
 use ark_ff::{BigInt, Field, PrimeField, UniformRand};
@@ -462,9 +464,15 @@ pub mod cross_transcript{
 
         /// Get a scalar challenge from the transcript.
         fn get_challenge(&mut self, label: &'static [u8], size: usize) -> Challenge;
+
+        fn as_transcript(&mut self) -> &mut Transcript;
     }
 
     impl<G1: AffineRepr + CanonicalSerialize, G2: AffineRepr + CanonicalSerialize> TranscriptProtocol<G1, G2> for Transcript {
+        fn as_transcript(&mut self) -> &mut Transcript {
+            self
+        }
+
         fn domain_sep(&mut self, label: &'static [u8]) {
             self.append_message(b"dom-sep", b"schnorrcrosszkp/1.0/");
             self.append_message(b"dom-sep", label);
