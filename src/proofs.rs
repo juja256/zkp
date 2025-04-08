@@ -80,12 +80,10 @@ impl<G: AffineRepr> BatchableProof<G> {
 }
 
 #[derive(Clone)]
-pub struct RangeProof {
+pub struct RangeProof (
     /// The range proof.
-    pub proof: bulletproofs::RangeProof,
-    /// The commitments factor for the range proof.
-    pub commitment: CompressedRistretto,
-}
+    pub bulletproofs::RangeProof,
+);
 
 impl CanonicalSerialize for RangeProof {
     fn serialize_with_mode<W: std::io::Write>(
@@ -94,18 +92,16 @@ impl CanonicalSerialize for RangeProof {
         compress: Compress,
     ) -> Result<(), SerializationError> {
         // Serialize the proof
-        let proof_bytes = self.proof.to_bytes();
+        let proof_bytes = self.0.to_bytes();
         (proof_bytes.len() as u32).serialize_with_mode(&mut writer, compress)?;
         writer.write_all(&proof_bytes)?;
-        writer.write_all(self.commitment.as_bytes())?;
 
         Ok(())
     }
 
     fn serialized_size(&self, _compress: Compress) -> usize {
-        let proof_size = self.proof.to_bytes().len();
-        let commitments_size: usize = 32;
-        proof_size + commitments_size + 8
+        let proof_size = self.0.to_bytes().len();
+        proof_size + 4
     }
 }
 
@@ -128,16 +124,7 @@ impl CanonicalDeserialize for RangeProof {
         let proof = bulletproofs::RangeProof::from_bytes(&proof_bytes)
             .map_err(|_| ark_serialize::SerializationError::InvalidData)?;
 
-        
-        // Deserialize the commitments
-        let mut buf = [0u8; 32];
-        reader.read_exact(&mut buf)?;
-        let commitment = CompressedRistretto::from_slice(&buf).map_err(|_| {
-            ark_serialize::SerializationError::InvalidData
-        })?;
-
-
-        Ok(RangeProof { proof, commitment })
+        Ok(RangeProof ( proof ))
     }
 }
 

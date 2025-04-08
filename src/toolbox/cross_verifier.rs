@@ -1,9 +1,12 @@
 use ark_ec::AffineRepr;
 use ark_ec::CurveGroup;
 use ark_ec::VariableBaseMSM;
+use ark_ed25519::EdwardsAffine;
 use ark_ff::BigInt;
 use ark_ff::PrimeField;
 use ark_ff::Zero;
+use bulletproofs::BulletproofGens;
+use bulletproofs::PedersenGens;
 use rand::{thread_rng, Rng};
 use std::borrow::BorrowMut;
 use std::iter;
@@ -14,12 +17,23 @@ use curve25519_dalek::traits::{IsIdentity, VartimeMultiscalarMul};
 
 use crate::toolbox::{SchnorrCS, cross_transcript::TranscriptProtocol};
 use crate::CompactCrossProof;
+use crate::RangeProof;
 use crate::{BatchableProof, CompactProof, ProofError, Transcript};
 
+use super::dalek_ark::ark_to_ristretto255;
 use super::Point;
 use super::PointVar;
 use super::Scalar;
 use super::ScalarVar;
+
+macro_rules! cast {
+    ($value:expr, $pattern:path) => {
+        match $value {
+            $pattern(inner) => inner,
+            _ => panic!("Failed to cast value to {}", stringify!($pattern)),
+        }
+    };
+}
 
 /// Used to produce verification results.
 ///
@@ -47,7 +61,8 @@ pub struct CrossVerifier<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G
     num_scalars: usize,
     points: Vec<Point<G1, G2>>,
     point_labels: Vec<&'static [u8]>,
-    constraints: Vec<(PointVar, Vec<(ScalarVar, PointVar)>)>,
+    constraints: Vec<(PointVar, Vec<(ScalarVar, PointVar)>, Option<ScalarVar>)>,
+
 }
 
 impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut<U>, const B_x: usize, const B_c: usize, const B_f: usize> CrossVerifier<G1, G2, U, T, B_x, B_c, B_f>
@@ -58,7 +73,6 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
     /// Construct a verifier for the proof statement with the given
     /// `proof_label`, operating on the given `transcript`.
     pub fn new(proof_label: &'static [u8], mut transcript: T) -> Self {
-        //<Transcript as TranscriptProtocol<G>>::domain_sep(transcript.borrow_mut(), proof_label);
         transcript.borrow_mut().domain_sep(proof_label);
         CrossVerifier {
             transcript,
@@ -98,7 +112,7 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
         }
 
         // Recompute the prover's commitments based on their claimed challenge value:
-        for (lhs_var, rhs_lc) in &self.constraints {
+        for (lhs_var, rhs_lc, _) in &self.constraints {
             let commitment = match self.points[lhs_var.0] {
                 Point::G1(_) => {
                     Point::G1(G1::Group::msm(
@@ -160,59 +174,41 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
             Err(ProofError::VerificationFailure)
         }
     }
-/* 
-    /// Consume the verifier to produce a verification of a [`BatchableProof`].
-    pub fn verify_batchable(mut self, proof: &BatchableProof<G>) -> Result<(), ProofError> {
-        // Check that there are as many responses as secret variables
-        if proof.responses.len() != self.num_scalars {
-            return Err(ProofError::VerificationFailure);
-        }
-        // Check that there are as many commitments as constraints
-        if proof.commitments.len() != self.constraints.len() {
-            return Err(ProofError::VerificationFailure);
-        }
 
-        // Feed the prover's commitments into the transcript:
-        for (i, commitment) in proof.commitments.iter().enumerate() {
-            let (ref lhs_var, ref _rhs_lc) = self.constraints[i];
-            self.transcript.borrow_mut().validate_and_append_blinding_commitment(
-                self.point_labels[lhs_var.0],
-                &commitment,
-            )?;
-        }
+}
 
-        let minus_c = -self.transcript.borrow_mut().get_challenge(b"chal");
+#[cfg(feature = "rangeproof")]
+impl<G1: AffineRepr, U: TranscriptProtocol<G1, EdwardsAffine>, T: BorrowMut<U>, const B_x: usize, const B_c: usize, const B_f: usize> 
+    CrossVerifier<G1, EdwardsAffine, U, T, B_x, B_c, B_f> 
+    where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>,
+          <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
+    pub fn verify_range_proofs(&mut self, range_proofs: &[RangeProof]) -> Result<(), ProofError> {
+        let mut range_proof_iter = range_proofs.iter();
+        self.constraints.to_owned().iter().filter_map(|(lhs, rhs_lc, rp)| match rp {
+            Some(_) => {
+                let (G, H) = (cast!(self.points[rhs_lc[0].1.0], Point::G2), cast!(self.points[rhs_lc[1].1.0], Point::G2));
+                let Com = ark_to_ristretto255(cast!(self.points[lhs.0], Point::G2)).unwrap();
+                match range_proof_iter.next() {
+                    Some(rp) => Some(
+                        rp.0.verify_single(
+                        &BulletproofGens::new(B_x, 1), 
+                        &PedersenGens { B: ark_to_ristretto255(G).unwrap(), B_blinding: ark_to_ristretto255(H).unwrap() },
+                        self.transcript.borrow_mut().as_transcript(), 
+                        &Com.compress(), 
+                        B_x)
+                        .map_err(|_| ProofError::VerificationFailure)
+                    ),
+                    None => Some(Err(ProofError::VerificationFailure))
+                }
+            },
+            None => None,
+        }).collect::<Result<(), ProofError>>()
+    }
 
-        let commitments_offset = self.points.len();
-        let combined_points = self.points.iter().chain(proof.commitments.iter()).map(|&p| p).collect::<Vec<G>>();
-
-        let mut coeffs = vec![G::ScalarField::zero(); self.points.len() + proof.commitments.len()];
-        // For each constraint of the form Q = sum(P_i, x_i),
-        // we want to ensure Q_com = sum(P_i, resp_i) - c * Q,
-        // so add the check rand*( sum(P_i, resp_i) - c * Q - Q_com ) == 0
-        for i in 0..self.constraints.len() {
-            let (ref lhs_var, ref rhs_lc) = self.constraints[i];
-            let random_factor = G::ScalarField::from(thread_rng().gen::<u128>());
-
-            coeffs[commitments_offset + i] += -random_factor;
-            coeffs[lhs_var.0] += random_factor * minus_c;
-            for (sc_var, pt_var) in rhs_lc {
-                coeffs[pt_var.0] += random_factor * proof.responses[sc_var.0];
-            }
-        }
-        
-        let check = G::Group::msm(
-            combined_points.as_slice(),
-            coeffs.as_slice()
-        )
-        .map_err(|_| ProofError::VerificationFailure)?;
-
-        if check.is_zero() {
-            Ok(())
-        } else {
-            Err(ProofError::VerificationFailure)
-        }
-    }*/
+    pub fn verify_cross(mut self, proof: &CompactCrossProof<G1::ScalarField, <EdwardsAffine as AffineRepr>::ScalarField>) -> Result<(), ProofError> {
+        self.verify_range_proofs(proof.range_proofs.as_slice())?;
+        self.verify_compact(proof)
+    }
 }
 
 impl<'a, G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut<U>, const B_x: usize, const B_c: usize, const B_f: usize> SchnorrCS 
@@ -224,7 +220,15 @@ impl<'a, G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: Borro
     type ScalarVar = ScalarVar;
     type PointVar = PointVar;
 
-    fn constrain(&mut self, lhs: PointVar, linear_combination: Vec<(ScalarVar, PointVar)>) {
-        self.constraints.push((lhs, linear_combination));
+    fn constrain(&mut self, lhs: PointVar, linear_combination: Vec<(ScalarVar, PointVar)>) -> usize {
+        self.constraints.push((lhs, linear_combination, None));
+        self.constraints.len() - 1
+    }
+
+    #[cfg(feature = "rangeproof")]
+    fn require_range_proof(&mut self, constraint: usize, scalar: ScalarVar) {
+        assert!(matches!(self.points[self.constraints[constraint].0.0], Point::G2(_)), "Expected Point::G2, but found a different variant");
+        assert!(self.constraints[constraint].1.len() == 2, "Expected 2 linear combinations, but found a different number");
+        self.constraints[constraint].2 = Some(scalar);
     }
 }

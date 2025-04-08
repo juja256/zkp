@@ -58,6 +58,22 @@ use crate::ark_ff::BigInteger;
 
 use crate::{ProofError, Transcript};
 
+#[cfg(feature = "rangeproof")]
+macro_rules! cast {
+    ($target: expr, $pat: path) => {
+        {
+            if let $pat(a) = $target { // #1
+                a
+            } else {
+                panic!(
+                    "mismatch variant when cast to {}", 
+                    stringify!($pat)); // #2
+            }
+        }
+    };
+}
+
+
 /// A secret variable used during proving.
 #[derive(Copy, Clone)]
 pub struct ScalarVar(usize);
@@ -235,7 +251,11 @@ pub trait SchnorrCS {
         &mut self,
         lhs: Self::PointVar,
         linear_combination: Vec<(Self::ScalarVar, Self::PointVar)>,
-    );
+    ) -> usize;
+
+    #[cfg(feature = "rangeproof")]
+    /// Mark the contraint as a range proof commitment
+    fn require_range_proof(&mut self, constraint: usize, scalar: Self::ScalarVar);
 }
 
 pub mod standard_transcript{

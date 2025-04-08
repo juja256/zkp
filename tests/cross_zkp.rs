@@ -34,9 +34,8 @@ use zkp::toolbox::dalek_ark::ristretto255_to_ark;
 use zkp::toolbox::Scalar;
 
 use ark_ed25519::EdwardsAffine as ArkEdwardsAffine;
-use ark_secq256k1::Affine as G2Affine;
-use ark_secq256k1::Fr as F2;
-//use ark_test_curves::secp256k1::{Fr as F2, G1Affine as G2Affine};
+use ark_secq256k1::Affine as G1Affine;
+use ark_secq256k1::Fr as F1;
 
 use rand::thread_rng;
 use zkp::toolbox::cross_transcript::TranscriptProtocol;
@@ -44,7 +43,7 @@ use zkp::toolbox::Point;
 use zkp::toolbox::{cross_prover::CrossProver, cross_verifier::CrossVerifier, SchnorrCS};
 use zkp::CompactCrossProof;
 use zkp::Transcript;
-use ark_ed25519::{EdwardsAffine as G1Affine, Fr as F1, Fq, FqConfig, EdwardsConfig};
+use ark_ed25519::{EdwardsAffine as G2Affine, Fr as F2};
 
 
 fn dleq_statement<CS: SchnorrCS>(
@@ -60,10 +59,13 @@ fn dleq_statement<CS: SchnorrCS>(
     H2: CS::PointVar,
 ) {
     cs.constrain(Com1, vec![(x, G1), (r1, H1)]);
-    cs.constrain(Com2, vec![(x, G2), (r2, H2)]);
+    let c2 = cs.constrain(Com2, vec![(x, G2), (r2, H2)]);
+    cs.require_range_proof(c2, x);
 }
 
+
 #[test]
+#[cfg(feature="rangeproof")]
 fn cross_zkp() {
     let G1 = G1Affine::generator();
     let H1 = G1Affine::rand(&mut thread_rng());
@@ -81,7 +83,6 @@ fn cross_zkp() {
         let mut transcript = Transcript::new(b"DLEQTest");
         let mut prover: CrossProver<G1Affine, G2Affine, Transcript, _, 64, 128, 32> =
             CrossProver::new(b"DLEQProof", &mut transcript);
-
         // XXX committing var names to transcript forces ordering (?)
         let var_x = prover.allocate_scalar(b"x", Scalar::Cross(x)).unwrap();
         let var_r1 = prover.allocate_scalar(b"r1", Scalar::F1(r1)).unwrap();
@@ -106,13 +107,13 @@ fn cross_zkp() {
             var_H2,
         );
 
-        prover.prove_compact().unwrap()
+        prover.prove_cross().unwrap()
     };
     for (i, response) in proof.responses.iter().enumerate() {
         println!("proof response {}: {:?}", i, response.into_bigint());
     }
     let proof_bytes = proof.to_bytes().unwrap();
-    println!("{:?}\n{:?}", proof.responses, proof_bytes);
+    println!("proof_len = {:?}",proof_bytes.len());
     let parsed_proof: CompactCrossProof<_, _> =
         CompactCrossProof::<F1, F2>::from_bytes(&proof_bytes).unwrap();
 
@@ -143,7 +144,7 @@ fn cross_zkp() {
     );
 
 
-    verifier.verify_compact(&parsed_proof).unwrap();
+    verifier.verify_cross(&parsed_proof).unwrap();
 }
 /*
 #[test]

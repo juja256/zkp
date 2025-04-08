@@ -135,7 +135,11 @@ impl<G: AffineRepr, U: TranscriptProtocol<G>, T: BorrowMut<U>> SchnorrCS for Pro
     type ScalarVar = ScalarVar;
     type PointVar = PointVar;
 
-    fn constrain(&mut self, lhs: PointVar, linear_combination: Vec<(ScalarVar, PointVar)>) {
+    fn constrain(&mut self, lhs: PointVar, linear_combination: Vec<(ScalarVar, PointVar)>) -> usize {
         self.constraints.push((lhs, linear_combination));
+        self.constraints.len() - 1
     }
+
+    #[cfg(feature = "rangeproof")]
+    fn require_range_proof(&mut self, constraint: usize, scalar: ScalarVar) {}
 }

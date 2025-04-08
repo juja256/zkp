@@ -1,3 +1,5 @@
+use core::error;
+
 use thiserror::Error;
 /// An error during proving or verification, such as a verification failure.
 #[derive(Debug, Error)]
@@ -20,4 +22,7 @@ pub enum ProofError {
 
     #[error("Proof parsing failed")]
     ParsingFailure,
+
+    #[error("Range proof error")]
+    RangeProofError(bulletproofs::ProofError),
 }

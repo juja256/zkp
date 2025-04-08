@@ -1,9 +1,20 @@
 
 use std::borrow::BorrowMut;
+use std::cmp::min;
 use std::convert::TryInto;
 use std::marker::PhantomData;
+use std::sync::atomic::AtomicUsize;
 
 use ark_ec::{AffineRepr, CurveGroup};
+
+macro_rules! cast {
+    ($value:expr, $pattern:path) => {
+        match $value {
+            $pattern(inner) => inner,
+            _ => panic!("Failed to cast value to {}", stringify!($pattern)),
+        }
+    };
+}
 use ark_ed25519::EdwardsAffine;
 use ark_ff::{BigInt, BigInteger, PrimeField, UniformRand};
 use ark_ec::VariableBaseMSM;
@@ -23,14 +34,16 @@ pub struct CrossProver<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1,
           BigInt<4>: From<<G2::ScalarField as PrimeField>::BigInt>,
           <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>>,
           <G2::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
+    g: BigInt<4>,
+    g_bits: u32,
     phantom_u: PhantomData<U>,
     transcript: T,
 
-    scalars: Vec<Scalar<G1::ScalarField, G2::ScalarField >>,
+    scalars: Vec<Scalar<G1::ScalarField, G2::ScalarField>>,
     points: Vec<Point<G1, G2>>,
 
     point_labels: Vec<&'static [u8]>,
-    constraints: Vec<(PointVar, Vec<(ScalarVar, PointVar)>)>,
+    constraints: Vec<(PointVar, Vec<(ScalarVar, PointVar)>, Option<ScalarVar>)>,
 }
 
 
@@ -43,13 +56,14 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
     /// Construct a new prover.  The `proof_label` disambiguates proof
     /// statements.
     pub fn new(proof_label: &'static [u8], mut transcript: T) -> Self {
-        // G1 is smaller than G2
-        assert!(<G1::ScalarField as PrimeField>::MODULUS_BIT_SIZE <= <G2::ScalarField as PrimeField>::MODULUS_BIT_SIZE);
-        // B_x + B_c + B_f is smaller than G1::ScalarField::MODULUS_BIT_SIZE
-        assert!(B_x + B_c + B_f < <G1::ScalarField as PrimeField>::MODULUS_BIT_SIZE as usize);
+        let g_bits = min(<G1::ScalarField as PrimeField>::MODULUS_BIT_SIZE, <G2::ScalarField as PrimeField>::MODULUS_BIT_SIZE);
+        let g = min(BigInt::<4>::from(G1::ScalarField::MODULUS), BigInt::<4>::from(G2::ScalarField::MODULUS));
+        assert!(B_x + B_c + B_f < g_bits as usize);
 
         transcript.borrow_mut().domain_sep(proof_label);
         CrossProver {
+            g,
+            g_bits,
             phantom_u: PhantomData,
             transcript,
             scalars: Vec::default(),
@@ -104,14 +118,14 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
                 Scalar::F1(scalar) => Scalar::F1(G1::ScalarField::rand(&mut transcript_rng)),
                 Scalar::F2(scalar) => Scalar::F2(G2::ScalarField::rand(&mut transcript_rng)),
                 Scalar::Cross(scalar) => Scalar::Cross(
-                    BigInt::<4>::rand(&mut transcript_rng) >> ((<G1::ScalarField as PrimeField>::MODULUS_BIT_SIZE as u32) - (B_x + B_c + B_f) as u32) // clear the high bits
+                    BigInt::<4>::rand(&mut transcript_rng) >> (self.g_bits - (B_x + B_c + B_f) as u32) // clear the high bits
                 ),
             })
             .collect::<Vec<Scalar<G1::ScalarField, G2::ScalarField>>>();
 
         // Commit to each blinded LHS
         let mut commitments = Vec::with_capacity(self.constraints.len());
-        for (lhs_var, rhs_lc) in &self.constraints {
+        for (lhs_var, rhs_lc, _) in &self.constraints {
             let commitment = match self.points[lhs_var.0] {
                 Point::G1(_) => {
                     Point::G1(
@@ -180,7 +194,7 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
                             return Err(ProofError::ScalarVarExceedsBound)
                         } 
                         let carry = s0.add_with_carry(blinding);
-                        if carry || (BigInt::<4>::from(s0) > BigInt::<4>::from(G1::ScalarField::MODULUS)) {
+                        if carry || (BigInt::<4>::from(s0) > self.g) {
                             Err(ProofError::ProverAborted)
                         } else {
                             Ok(Scalar::Cross(s0))
@@ -205,23 +219,10 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
         Ok(CompactCrossProof {
             challenge,
             responses,
+            #[cfg(feature = "rangeproof")]
+            range_proofs: vec![],
         })
     }
-}
-
-#[cfg(feature = "rangeproof")]
-macro_rules! cast {
-    ($target: expr, $pat: path) => {
-        {
-            if let $pat(a) = $target { // #1
-                a
-            } else {
-                panic!(
-                    "mismatch variant when cast to {}", 
-                    stringify!($pat)); // #2
-            }
-        }
-    };
 }
 
 #[cfg(feature = "rangeproof")]
@@ -231,47 +232,32 @@ impl<G1: AffineRepr, U: TranscriptProtocol<G1, EdwardsAffine>, T: BorrowMut<U>, 
           <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
     
     pub fn get_range_proofs(&mut self) -> Result<Vec<RangeProof>, ProofError> {
-        let bp_gens = BulletproofGens::new(B_x, 1);
-        let mut range_proofs = vec![];
-        for (i, sc) in self.scalars.iter().enumerate() {
-            // find blinder in Pedersen commitment so that Com(x) = [x]G + [r]H
-            if let Scalar::Cross(x) = sc {
-                let (Com, G, H, sc) = self.constraints.iter().find_map(|(lhs_var, rhs_lc)| {
-                    if let Point::G2(_) = self.points[lhs_var.0] {
-                        if rhs_lc.len() == 2 && rhs_lc[0].0.0 == i {
-                            Some((self.points[lhs_var.0], self.points[rhs_lc[0].1.0], self.points[rhs_lc[1].1.0], self.scalars[rhs_lc[1].0.0].clone() ))
-                        } else if rhs_lc.len() == 2 && rhs_lc[1].0.0 == i {
-                            Some((self.points[lhs_var.0], self.points[rhs_lc[1].1.0], self.points[rhs_lc[0].1.0], self.scalars[rhs_lc[0].0.0].clone() ))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }).ok_or(ProofError::ProverAborted)?;
-
-                let (G, H) = (cast!(G, Point::G2), cast!(H, Point::G2));
-                let (range_proof, commitment) = bulletproofs::RangeProof::prove_single(
-                    &bp_gens,
-                    &PedersenGens { B: ark_to_ristretto255(G).unwrap(), B_blinding: ark_to_ristretto255(H).unwrap() },
-                    self.transcript.borrow_mut().as_transcript(),
-                    x.0[0],
-                    &curve25519_dalek::Scalar::from_bytes_mod_order(sc.into_bigint().to_bytes_le()[..].try_into().unwrap()),
-                    B_x,
-                ).map_err(|_| ProofError::ProverAborted)?;
-
-                range_proofs.push(RangeProof {
-                    proof: range_proof,
-                    commitment: commitment,
-                });
-            }
-        }
-        Ok(range_proofs)
+        Ok(
+            self.constraints.to_owned().iter()
+            .filter_map(|(_lhc, rhs_lc, range_proof)| match range_proof {
+                Some(_) => {
+                    let (G, H) = (cast!(self.points[rhs_lc[0].1.0], Point::G2), cast!(self.points[rhs_lc[1].1.0], Point::G2));
+                    let (v, v_blinding) = (cast!(self.scalars[rhs_lc[0].0.0], Scalar::Cross), cast!(self.scalars[rhs_lc[1].0.0], Scalar::F2));
+                    Some(bulletproofs::RangeProof::prove_single(
+                        &BulletproofGens::new(B_x, 1),
+                        &PedersenGens { B: ark_to_ristretto255(G).unwrap(), B_blinding: ark_to_ristretto255(H).unwrap() },
+                        self.transcript.borrow_mut().as_transcript(),
+                        v.0[0],
+                        &curve25519_dalek::Scalar::from_bytes_mod_order(v_blinding.into_bigint().to_bytes_le()[..].try_into().unwrap()),
+                        B_x,
+                        ).map(|(r,c)| RangeProof(r))
+                        .map_err(|e| ProofError::RangeProofError(e))
+                    )
+                },
+                None => None,
+            })
+            .collect::<Result<Vec<_>, ProofError>>()?
+        )
     }
 
     /// proving equality of two Pedersen commitments to small x in different groups using bulletproofs and https://eprint.iacr.org/2022/1593.pdf
     pub fn prove_cross(mut self) -> Result<CompactCrossProof<G1::ScalarField, <EdwardsAffine as AffineRepr>::ScalarField>, ProofError> {
-        let mut range_proofs = self.get_range_proofs()?;
+        let range_proofs = self.get_range_proofs()?;
         let (challenge, responses, _) = self.prove_impl()?;
 
         Ok(CompactCrossProof {
@@ -290,7 +276,16 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
     type ScalarVar = ScalarVar;
     type PointVar = PointVar;
 
-    fn constrain(&mut self, lhs: Self::PointVar, linear_combination: Vec<(Self::ScalarVar, Self::PointVar)>) {
-        self.constraints.push((lhs, linear_combination));
+    fn constrain(&mut self, lhs: Self::PointVar, linear_combination: Vec<(Self::ScalarVar, Self::PointVar)>) -> usize {
+        self.constraints.push((lhs, linear_combination, None));
+        self.constraints.len() - 1
+    }
+
+    #[cfg(feature = "rangeproof")]
+    fn require_range_proof(&mut self, constraint: usize, scalar: ScalarVar) {
+        assert!(matches!(self.points[self.constraints[constraint].0.0], Point::G2(_)), "Expected Point::G2, but found a different variant");
+        assert!(self.constraints[constraint].1.len() == 2, "Expected 2 linear combinations, but found a different number");
+        assert!(matches!(self.scalars[self.constraints[constraint].1[0].0.0], Scalar::Cross(_)), "Expected Scalar::Cross, but found a different variant");
+        self.constraints[constraint].2 = Some(scalar);
     }
 }

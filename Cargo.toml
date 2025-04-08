@@ -22,7 +22,7 @@ exclude = [
 features = ["nightly"]
 
 [dependencies]
-merlin = { version = "3.0.0", features = ["debug-transcript"] }
+merlin = { version = "3.0.0" }
 rand = "0.8.5"
 rand_core = "0.6.4"
 serde = { version = "1.0", features = ["derive"] }
@@ -47,9 +47,9 @@ sha2 = "0.10.8"
 [features]
 rangeproof = []
 nightly = []
-debug-transcript = ["merlin/debug-transcript"]
+debug-transcript = []
 bench = []
-default = ["u64_backend"]
+default = ["u64_backend", "rangeproof"]
 u32_backend = []
 u64_backend = []
 simd_backend = []
