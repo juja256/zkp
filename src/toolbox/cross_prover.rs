@@ -43,7 +43,7 @@ pub struct CrossProver<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1,
     points: Vec<Point<G1, G2>>,
 
     point_labels: Vec<&'static [u8]>,
-    constraints: Vec<(PointVar, Vec<(ScalarVar, PointVar)>, Option<ScalarVar>)>,
+    constraints: Vec<(PointVar, Vec<(ScalarVar, PointVar)>, Option<()>)>,
 }
 
 
@@ -282,10 +282,10 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
     }
 
     #[cfg(feature = "rangeproof")]
-    fn require_range_proof(&mut self, constraint: usize, scalar: ScalarVar) {
+    fn require_range_proof(&mut self, constraint: usize) {
         assert!(matches!(self.points[self.constraints[constraint].0.0], Point::G2(_)), "Expected Point::G2, but found a different variant");
         assert!(self.constraints[constraint].1.len() == 2, "Expected 2 linear combinations, but found a different number");
         assert!(matches!(self.scalars[self.constraints[constraint].1[0].0.0], Scalar::Cross(_)), "Expected Scalar::Cross, but found a different variant");
-        self.constraints[constraint].2 = Some(scalar);
+        self.constraints[constraint].2 = Some(());
     }
 }

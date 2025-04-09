@@ -254,5 +254,5 @@ impl<'a, G: AffineRepr, U: TranscriptProtocol<G>, T: BorrowMut<U>> SchnorrCS for
         self.constraints.len() - 1
     }
 
-    fn require_range_proof(&mut self, constraint: usize, scalar: ScalarVar) {}
+    fn require_range_proof(&mut self, _constraint: usize) {}
 }

@@ -255,7 +255,7 @@ pub trait SchnorrCS {
 
     #[cfg(feature = "rangeproof")]
     /// Mark the contraint as a range proof commitment
-    fn require_range_proof(&mut self, constraint: usize, scalar: Self::ScalarVar);
+    fn require_range_proof(&mut self, constraint: usize);
 }
 
 pub mod standard_transcript{

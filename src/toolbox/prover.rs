@@ -141,5 +141,5 @@ impl<G: AffineRepr, U: TranscriptProtocol<G>, T: BorrowMut<U>> SchnorrCS for Pro
     }
 
     #[cfg(feature = "rangeproof")]
-    fn require_range_proof(&mut self, constraint: usize, scalar: ScalarVar) {}
+    fn require_range_proof(&mut self, constraint: usize) {}
 }

@@ -60,7 +60,7 @@ fn dleq_statement<CS: SchnorrCS>(
 ) {
     cs.constrain(Com1, vec![(x, G1), (r1, H1)]);
     let c2 = cs.constrain(Com2, vec![(x, G2), (r2, H2)]);
-    cs.require_range_proof(c2, x);
+    cs.require_range_proof(c2);
 }
 
 
@@ -72,7 +72,7 @@ fn cross_zkp() {
     let G2 = G2Affine::rand(&mut thread_rng());
     let H2 = G2Affine::rand(&mut thread_rng());
 
-    let x = BigInt::<4>::from(1u64 << 63);
+    let x = BigInt::<4>::from((1u64 << 63) +4545);
     let r1 = F1::rand(&mut thread_rng());
     let r2 = F2::rand(&mut thread_rng());
 

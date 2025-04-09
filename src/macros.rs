@@ -485,3 +485,436 @@ macro_rules! define_proof {
         }
     }
 }
+
+
+#[macro_export]
+macro_rules! define_cross_proof {
+    (
+        $proof_module_name:ident // Name of the module to create
+        ,
+        $proof_label_string:expr // A string literal, used as a domain separator
+        ,
+        ( $($secret_var:ident),+ ) // Common secret variables, sep by commas
+        ,
+        ( $($secret_var_1:ident),+ ) // Secret variables in G1, sep by commas
+        ,
+        ( $($secret_var_2:ident),+ ) // Secret variables in G2, sep by commas
+        ,
+        ( $($instance_var_1:ident),* ) // Public instance variables in G1, separated by commas
+        ,
+        ( $($instance_var_2:ident),* ) // Public instance variables in G2, separated by commas
+        ,
+        ( $($common_var_1:ident),* ) // Public common variables in G1, separated by commas
+        ,
+        ( $($common_var_2:ident),* ) // Public common variables in G2, separated by commas
+        :
+        // List of statements to prove
+        // Format: LHS = ( ... RHS expr ... ),
+        $($lhs:ident = $statement:tt),+
+    ) => {
+        /// An auto-generated Schnorr proof implementation.
+        ///
+        /// Proofs are created using `prove_compact` or
+        /// `prove_batchable`, producing `CompactProof`s or
+        /// `BatchableProof`s respectively.  These are verified
+        /// using `verify_compact` and `verify_batchable`;
+        /// `BatchableProofs` can also be batch-verified using
+        /// `batch_verify`, but they have slightly larger proof
+        /// sizes compared to `CompactProof`s.
+        ///
+        /// The internal details of the proof statement are accessible
+        /// in the `internals` module.  While this is not necessary
+        /// to create and verify proofs, the it can be used with the
+        /// lower-level constraint system API to manually combine
+        /// statements from different proofs.
+        #[allow(non_snake_case)]
+        pub mod $proof_module_name {
+            use $crate::ark_ec::{AffineRepr, CurveGroup};
+            use $crate::ark_ff::{BigInteger, BigInt, PrimeField, UniformRand};
+            use $crate::ark_ec::VariableBaseMSM;
+
+            use $crate::toolbox::cross_prover::CrossProver;
+            use $crate::toolbox::cross_verifier::CrossVerifier;
+            use $crate::toolbox::{Point, Scalar};
+            use ark_ed25519::EdwardsAffine;
+
+            pub use $crate::merlin::Transcript;
+            pub use $crate::{CompactCrossProof, ProofError};
+
+            /// The generated [`internal`] module contains lower-level
+            /// functions at the level of the Schnorr constraint
+            /// system API.
+            pub mod internal {
+                use $crate::toolbox::SchnorrCS;
+
+                /// The proof label committed to the transcript as a domain separator.
+                pub const PROOF_LABEL: &'static str = $proof_label_string;
+
+                /// A container type that holds transcript labels for secret variables.
+                pub struct TranscriptLabels {
+                    $( pub $secret_var: &'static str, )+
+                    $( pub $secret_var_1: &'static str, )+
+                    $( pub $secret_var_2: &'static str, )+
+                    $( pub $instance_var_1: &'static str, )+
+                    $( pub $instance_var_2: &'static str, )+
+                    $( pub $common_var_1: &'static str, )+
+                    $( pub $common_var_2: &'static str, )+
+                }
+
+                /// The transcript labels used for each secret variable.
+                pub const TRANSCRIPT_LABELS: TranscriptLabels = TranscriptLabels {
+                    $( $secret_var: stringify!($secret_var), )+
+                    $( $secret_var_1: stringify!($secret_var_1), )+
+                    $( $secret_var_2: stringify!($secret_var_2), )+
+                    $( $instance_var_1: stringify!($instance_var_1), )+
+                    $( $instance_var_2: stringify!($instance_var_2), )+
+                    $( $common_var_1: stringify!($common_var_1), )+
+                    $( $common_var_2: stringify!($common_var_2), )+
+                };
+
+                /// A container type that simulates named parameters for [`proof_statement`].
+                #[derive(Copy, Clone)]
+                pub struct SecretVars<CS: SchnorrCS> {
+                    $( pub $secret_var: CS::ScalarVar, )+
+                    $( pub $secret_var_1: CS::ScalarVar, )+
+                    $( pub $secret_var_2: CS::ScalarVar, )+
+                }
+
+                /// A container type that simulates named parameters for [`proof_statement`].
+                #[derive(Copy, Clone)]
+                pub struct PublicVars<CS: SchnorrCS> {
+                    $( pub $instance_var_1: CS::PointVar, )+
+                    $( pub $instance_var_2: CS::PointVar, )+
+                    $( pub $common_var_1: CS::PointVar, )+
+                    $( pub $common_var_2: CS::PointVar, )+
+                }
+
+                /// The underlying proof statement generated by the macro invocation.
+                ///
+                /// This function exists separately from the proving
+                /// and verification functions to allow composition of
+                /// different proof statements with common variable
+                /// assignments.
+                pub fn proof_statement<CS: SchnorrCS>(
+                    cs: &mut CS,
+                    secrets: SecretVars<CS>,
+                    publics: PublicVars<CS>,
+                ) {
+                    $(
+                        let c = cs.constrain(
+                            publics.$lhs,
+                            __compute_formula_constraint!( (publics, secrets) $statement ),
+                        );
+                        if stringify!($lhs).starts_with("Com") {
+                            cs.require_range_proof(c);
+                        }
+                    )+
+                }
+            }
+
+            /// Named parameters for [`prove_compact`] and [`prove_batchable`].
+            #[derive(Copy, Clone)]
+            pub struct ProveAssignments<'a, G1: AffineRepr, G2: AffineRepr> {
+                $(pub $secret_var: &'a BigInt<4>,)+
+                $(pub $secret_var_1: &'a G1::ScalarField,)+
+                $(pub $secret_var_2: &'a G2::ScalarField,)+
+                $(pub $instance_var_1: &'a G1,)+
+                $(pub $instance_var_2: &'a G2,)+
+                $(pub $common_var_1: &'a G1,)+
+                $(pub $common_var_2: &'a G2,)+
+            }
+
+            /// Named parameters for [`verify_compact`] and [`verify_batchable`].
+            #[derive(Copy, Clone)]
+            pub struct VerifyAssignments<'a, G1: AffineRepr, G2: AffineRepr> {
+                $(pub $instance_var_1: &'a G1,)+
+                $(pub $instance_var_2: &'a G2,)+
+                $(pub $common_var_1: &'a G1,)+
+                $(pub $common_var_2: &'a G2,)+
+            }
+
+            /// Point encodings computed during proving and returned to allow reuse.
+            ///
+            /// This is used to allow a prover to avoid having to
+            /// re-compress points used in the proof that may be
+            /// necessary to supply to the verifier.
+            #[derive(Copy, Clone)]
+            pub struct CompressedPoints<G1: AffineRepr, G2: AffineRepr> {
+                $(pub $instance_var_1: G1,)+
+                $(pub $instance_var_2: G2,)+
+                $(pub $common_var_1: G1,)+
+                $(pub $common_var_2: G2,)+
+            }
+
+            /* 
+            /// Named parameters for [`batch_verify`].
+            #[derive(Clone)]
+            pub struct BatchVerifyAssignments<G: AffineRepr> {
+                $(pub $instance_var: Vec<G>,)+
+                $(pub $common_var: G,)+
+            }
+            */
+            fn build_prover<'a, G1: AffineRepr, G2: AffineRepr, const B_x: usize, const B_c: usize, const B_f: usize> (
+                transcript: &'a mut Transcript,
+                assignments: ProveAssignments<G1, G2>,
+            ) -> Result<(CrossProver<G1, G2, Transcript, &'a mut Transcript, B_x, B_c, B_f>, CompressedPoints<G1, G2>), ProofError>
+            where 
+                BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
+                BigInt<4>: From<<G2::ScalarField as PrimeField>::BigInt>,
+                <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>>,
+                <G2::ScalarField as PrimeField>::BigInt: From<BigInt<4>>,
+            {
+                use self::internal::*;
+                use $crate::toolbox::cross_prover::*;
+                use $crate::toolbox::PointVar;
+                
+                let mut prover: CrossProver<G1, G2, Transcript, _, B_x, B_c, B_f> 
+                    = CrossProver::new(PROOF_LABEL.as_bytes(), transcript);
+
+                let secret_vars = SecretVars {
+                    $(
+                        $secret_var: prover.allocate_scalar(
+                            TRANSCRIPT_LABELS.$secret_var.as_bytes(),
+                            Scalar::Cross(*assignments.$secret_var),
+                        )?,
+                    )+
+                    $(
+                        $secret_var_1: prover.allocate_scalar(
+                            TRANSCRIPT_LABELS.$secret_var_1.as_bytes(),
+                            Scalar::F1(*assignments.$secret_var_1),
+                        )?,
+                    )+
+                    $(
+                        $secret_var_2: prover.allocate_scalar(
+                            TRANSCRIPT_LABELS.$secret_var_2.as_bytes(),
+                            Scalar::F2(*assignments.$secret_var_2),
+                        )?,
+                    )+
+                };
+
+                struct VarPointPairs<G1: AffineRepr, G2: AffineRepr> {
+                    $( pub $instance_var_1: (PointVar, G1), )+
+                    $( pub $instance_var_2: (PointVar, G2), )+
+                    $( pub $common_var_1: (PointVar, G1), )+
+                    $( pub $common_var_2: (PointVar, G2), )+
+                }
+
+                let pairs = VarPointPairs {
+                    $(
+                        $instance_var_1: (prover.allocate_point(
+                            TRANSCRIPT_LABELS.$instance_var_1.as_bytes(),
+                            Point::G1(*assignments.$instance_var_1),
+                        ), *assignments.$instance_var_1),
+                    )+
+                    $(
+                        $instance_var_2: (prover.allocate_point(
+                            TRANSCRIPT_LABELS.$instance_var_2.as_bytes(),
+                            Point::G2(*assignments.$instance_var_2),
+                        ), *assignments.$instance_var_2),
+                    )+
+                    $(
+                        $common_var_1: (prover.allocate_point(
+                            TRANSCRIPT_LABELS.$common_var_1.as_bytes(),
+                            Point::G1(*assignments.$common_var_1),
+                        ), *assignments.$common_var_1),
+                    )+
+                    $(
+                        $common_var_2: (prover.allocate_point(
+                            TRANSCRIPT_LABELS.$common_var_2.as_bytes(),
+                            Point::G2(*assignments.$common_var_2),
+                        ), *assignments.$common_var_2),  
+                    )+
+                };
+
+                // XXX return compressed points
+                let public_vars = PublicVars {
+                    $($instance_var_1: pairs.$instance_var_1.0,)+
+                    $($instance_var_2: pairs.$instance_var_2.0,)+
+                    $($common_var_1: pairs.$common_var_1.0,)+
+                    $($common_var_2: pairs.$common_var_2.0,)+
+                };
+
+                let compressed = CompressedPoints {
+                    $($instance_var_1: pairs.$instance_var_1.1,)+
+                    $($instance_var_2: pairs.$instance_var_2.1,)+
+                    $($common_var_1: pairs.$common_var_1.1,)+
+                    $($common_var_2: pairs.$common_var_2.1,)+
+                };
+
+                proof_statement(&mut prover, secret_vars, public_vars);
+
+                Ok((prover, compressed))
+            }
+
+            /// Given a transcript and assignments to secret and public variables, produce a proof in compact format.
+            pub fn prove_compact<'a, G1: AffineRepr, G2: AffineRepr, const B_x: usize, const B_c: usize, const B_f: usize>(
+                transcript: &mut Transcript,
+                assignments: ProveAssignments<G1, G2>,
+            ) -> Result<(CompactCrossProof<G1::ScalarField, G2::ScalarField>, CompressedPoints<G1, G2>), ProofError>
+                where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
+                    BigInt<4>: From<<G2::ScalarField as PrimeField>::BigInt>,
+                    <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>>,
+                    <G2::ScalarField as PrimeField>::BigInt: From<BigInt<4>>, {
+                let (prover, compressed) = build_prover::<G1, G2, B_x, B_c, B_f>(transcript, assignments)?;
+
+                Ok((prover.prove_compact()?, compressed))
+            }
+
+            
+            #[cfg(feature = "rangeproof")]
+            /// Given a transcript and assignments to secret and public variables, produce a compact cross proof with range proofs
+            pub fn prove_cross<'a, G1: AffineRepr, const B_x: usize, const B_c: usize, const B_f: usize>(
+                transcript: &mut Transcript,
+                assignments: ProveAssignments<G1, EdwardsAffine>,
+            ) -> Result<(CompactCrossProof<G1::ScalarField, <EdwardsAffine as AffineRepr>::ScalarField>, CompressedPoints<G1, EdwardsAffine>), ProofError>
+                where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
+                    <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
+                let (prover, compressed) = build_prover::<G1, EdwardsAffine, B_x, B_c, B_f>(transcript, assignments)?;
+
+                Ok((prover.prove_cross()?, compressed))
+            }
+
+            /*
+            /// Given a transcript and assignments to secret and public variables, produce a proof in batchable format.
+            pub fn prove_batchable<G: AffineRepr>(
+                transcript: &mut Transcript,
+                assignments: ProveAssignments<G>,
+            ) -> (BatchableProof<G>, CompressedPoints<G>) {
+                let (prover, compressed) = build_prover(transcript, assignments);
+
+                (prover.prove_batchable(), compressed)
+            }
+            */
+            fn build_verifier<'a, G1: AffineRepr, G2: AffineRepr, const B_x: usize, const B_c: usize, const B_f: usize>(
+                transcript: &'a mut Transcript,
+                assignments: VerifyAssignments<G1, G2>,
+            ) -> Result<CrossVerifier<G1, G2, Transcript, &'a mut Transcript, B_x, B_c, B_f>, ProofError>
+                where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
+                    BigInt<4>: From<<G2::ScalarField as PrimeField>::BigInt>,
+                    <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>>,
+                    <G2::ScalarField as PrimeField>::BigInt: From<BigInt<4>>, {
+                use self::internal::*;
+                use $crate::toolbox::cross_verifier::*;
+
+                let mut verifier: CrossVerifier<G1, G2, Transcript, _, B_x, B_c, B_f> 
+                    = CrossVerifier::new(PROOF_LABEL.as_bytes(), transcript);
+
+                let secret_vars = SecretVars {
+                    $($secret_var: verifier.allocate_scalar(TRANSCRIPT_LABELS.$secret_var.as_bytes()),)+
+                    $($secret_var_1: verifier.allocate_scalar(TRANSCRIPT_LABELS.$secret_var_1.as_bytes()),)+
+                    $($secret_var_2: verifier.allocate_scalar(TRANSCRIPT_LABELS.$secret_var_2.as_bytes()),)+
+                };
+
+                let public_vars = PublicVars {
+                    $(
+                        $instance_var_1: verifier.allocate_point(
+                            TRANSCRIPT_LABELS.$instance_var_1.as_bytes(),
+                            Point::G1(*assignments.$instance_var_1),
+                        )?,
+                    )+
+                    $(
+                        $instance_var_2: verifier.allocate_point(
+                            TRANSCRIPT_LABELS.$instance_var_2.as_bytes(),
+                            Point::G2(*assignments.$instance_var_2),
+                        )?,
+                    )+
+                    $(
+                        $common_var_1: verifier.allocate_point(
+                            TRANSCRIPT_LABELS.$common_var_1.as_bytes(),
+                            Point::G1(*assignments.$common_var_1),
+                        )?,
+                    )+
+                    $(
+                        $common_var_2: verifier.allocate_point(
+                            TRANSCRIPT_LABELS.$common_var_2.as_bytes(),
+                            Point::G2(*assignments.$common_var_2),
+                        )?,
+                    )+
+                };
+
+                proof_statement(&mut verifier, secret_vars, public_vars);
+
+                Ok(verifier)
+            }
+
+            /// Given a transcript and assignments to public variables, verify a proof in compact format.
+            pub fn verify_compact<G1: AffineRepr, G2: AffineRepr, const B_x: usize, const B_c: usize, const B_f: usize>(
+                proof: &CompactCrossProof<G1::ScalarField, G2::ScalarField>,
+                transcript: &mut Transcript,
+                assignments: VerifyAssignments<G1, G2>,
+            ) -> Result<(), ProofError> 
+                where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
+                    BigInt<4>: From<<G2::ScalarField as PrimeField>::BigInt>,
+                    <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>>,
+                    <G2::ScalarField as PrimeField>::BigInt: From<BigInt<4>>, {
+                let verifier = build_verifier::<G1, G2, B_x, B_c, B_f>(transcript, assignments)?;
+
+                verifier.verify_compact(proof)
+            }
+
+            #[cfg(feature = "rangeproof")]
+            /// Verify a compact cross proof with range proofs
+            pub fn verify_cross<G1: AffineRepr, const B_x: usize, const B_c: usize, const B_f: usize>(
+                proof: &CompactCrossProof<G1::ScalarField, <EdwardsAffine as AffineRepr>::ScalarField>,
+                transcript: &mut Transcript,
+                assignments: VerifyAssignments<G1, EdwardsAffine>,
+            ) -> Result<(), ProofError> 
+                where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
+                    <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>>, {
+                let verifier = build_verifier::<G1, EdwardsAffine, B_x, B_c, B_f>(transcript, assignments)?;
+
+                verifier.verify_cross(proof)
+            }
+
+            /*
+            /// Given a transcript and assignments to public variables, verify a proof in batchable format.
+            pub fn verify_batchable<G: AffineRepr>(
+                proof: &BatchableProof<G>,
+                transcript: &mut Transcript,
+                assignments: VerifyAssignments<G>,
+            ) -> Result<(), ProofError> {
+                let verifier = build_verifier(transcript, assignments)?;
+
+                verifier.verify_batchable(proof)
+            }
+
+            /// Verify a batch of proofs, given a batch of transcripts and a batch of assignments.
+            pub fn batch_verify<G: AffineRepr>(
+                proofs: &[BatchableProof<G>],
+                transcripts: Vec<&mut Transcript>,
+                assignments: BatchVerifyAssignments<G>,
+            ) -> Result<(), ProofError> {
+                use self::internal::*;
+                use $crate::toolbox::batch_verifier::*;
+
+                let batch_size = proofs.len();
+
+                let mut verifier: BatchVerifier<G, Transcript, &mut Transcript> = BatchVerifier::new(PROOF_LABEL.as_bytes(), batch_size, transcripts)?;
+
+                let secret_vars = SecretVars {
+                    $($secret_var: verifier.allocate_scalar(TRANSCRIPT_LABELS.$secret_var.as_bytes()),)+
+                };
+
+                let public_vars = PublicVars {
+                    $(
+                        $instance_var: verifier.allocate_instance_point(
+                            TRANSCRIPT_LABELS.$instance_var.as_bytes(),
+                            assignments.$instance_var,
+                        )?,
+                    )+
+                    $(
+                        $common_var: verifier.allocate_static_point(
+                            TRANSCRIPT_LABELS.$common_var.as_bytes(),
+                            assignments.$common_var,
+                        )?,
+                    )+
+                };
+
+                proof_statement(&mut verifier, secret_vars, public_vars);
+
+                verifier.verify_batchable(proofs)
+            }*/
+
+        }
+    }
+}
