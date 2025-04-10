@@ -183,26 +183,52 @@ impl<G1: AffineRepr, U: TranscriptProtocol<G1, EdwardsAffine>, T: BorrowMut<U>, 
     where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>,
           <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
     pub fn verify_range_proofs(&mut self, range_proofs: &[RangeProof]) -> Result<(), ProofError> {
-        let mut range_proof_iter = range_proofs.iter();
-        self.constraints.to_owned().iter().filter_map(|(lhs, rhs_lc, rp)| match rp {
-            Some(_) => {
-                let (G, H) = (cast!(self.points[rhs_lc[0].1.0], Point::G2), cast!(self.points[rhs_lc[1].1.0], Point::G2));
-                let Com = ark_to_ristretto255(cast!(self.points[lhs.0], Point::G2)).unwrap();
-                match range_proof_iter.next() {
-                    Some(rp) => Some(
-                        rp.0.verify_single(
-                        &BulletproofGens::new(B_x, 1), 
-                        &PedersenGens { B: ark_to_ristretto255(G).unwrap(), B_blinding: ark_to_ristretto255(H).unwrap() },
-                        self.transcript.borrow_mut().as_transcript(), 
-                        &Com.compress(), 
-                        B_x)
-                        .map_err(|_| ProofError::VerificationFailure)
-                    ),
-                    None => Some(Err(ProofError::VerificationFailure))
-                }
-            },
-            None => None,
-        }).collect::<Result<(), ProofError>>()
+        #[cfg(feature = "rangeproof_batchable")]
+        {
+            if range_proofs.len() != 1 {
+                return Err(ProofError::ParsingFailure);
+            }
+            let v = self.constraints.to_owned().iter()
+                .filter_map(|(lhs, rhs_lc, range_proof)| match range_proof {
+                    Some(_) => {
+                        let (G, H) = (cast!(self.points[rhs_lc[0].1.0], Point::G2), cast!(self.points[rhs_lc[1].1.0], Point::G2));
+                        let Com = ark_to_ristretto255(cast!(self.points[lhs.0], Point::G2)).unwrap();
+                        Some((G, H, Com))
+                    },
+                    None => None,
+                }).collect::<Vec<_>>();
+            range_proofs[0].0.verify_multiple(
+                &BulletproofGens::new(B_x, 16), 
+                &PedersenGens { B: ark_to_ristretto255(v[0].0).unwrap(), B_blinding: ark_to_ristretto255(v[0].1).unwrap() },
+                self.transcript.borrow_mut().as_transcript(), 
+                v.iter().map(|&(_,_,v)| v.compress()).collect::<Vec<_>>().as_slice(), 
+                B_x
+            )
+            .map_err(|e| ProofError::RangeProofError(e))
+        }
+        #[cfg(not(feature = "rangeproof_batchable"))]
+        {
+            let mut range_proof_iter = range_proofs.iter();
+            self.constraints.to_owned().iter().filter_map(|(lhs, rhs_lc, rp)| match rp {
+                Some(_) => {
+                    let (G, H) = (cast!(self.points[rhs_lc[0].1.0], Point::G2), cast!(self.points[rhs_lc[1].1.0], Point::G2));
+                    let Com = ark_to_ristretto255(cast!(self.points[lhs.0], Point::G2)).unwrap();
+                    match range_proof_iter.next() {
+                        Some(rp) => Some(
+                            rp.0.verify_single(
+                            &BulletproofGens::new(B_x, 1), 
+                            &PedersenGens { B: ark_to_ristretto255(G).unwrap(), B_blinding: ark_to_ristretto255(H).unwrap() },
+                            self.transcript.borrow_mut().as_transcript(), 
+                            &Com.compress(), 
+                            B_x)
+                            .map_err(|_| ProofError::VerificationFailure)
+                        ),
+                        None => Some(Err(ProofError::VerificationFailure))
+                    }
+                },
+                None => None,
+            }).collect::<Result<(), ProofError>>()
+        }
     }
 
     pub fn verify_cross(mut self, proof: &CompactCrossProof<G1::ScalarField, <EdwardsAffine as AffineRepr>::ScalarField>) -> Result<(), ProofError> {

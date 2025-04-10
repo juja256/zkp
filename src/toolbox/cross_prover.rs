@@ -232,6 +232,29 @@ impl<G1: AffineRepr, U: TranscriptProtocol<G1, EdwardsAffine>, T: BorrowMut<U>, 
           <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
     
     pub fn get_range_proofs(&mut self) -> Result<Vec<RangeProof>, ProofError> {
+        #[cfg(feature = "rangeproof_batchable")]
+        {
+            let v = self.constraints.to_owned().iter()
+                .filter_map(|(_lhc, rhs_lc, range_proof)| match range_proof {
+                    Some(_) => {
+                        let (G, H) = (cast!(self.points[rhs_lc[0].1.0], Point::G2), cast!(self.points[rhs_lc[1].1.0], Point::G2));
+                        let (v, v_blinding) = (cast!(self.scalars[rhs_lc[0].0.0], Scalar::Cross), cast!(self.scalars[rhs_lc[1].0.0], Scalar::F2));
+                        Some((G, H, v.0[0], curve25519_dalek::Scalar::from_bytes_mod_order(v_blinding.into_bigint().to_bytes_le()[..].try_into().unwrap())))
+                    },
+                    None => None,
+                }).collect::<Vec<_>>();
+            bulletproofs::RangeProof::prove_multiple(
+                &BulletproofGens::new(B_x, 16), 
+                &PedersenGens { B: ark_to_ristretto255(v[0].0).unwrap(), B_blinding: ark_to_ristretto255(v[0].1).unwrap() },
+                self.transcript.borrow_mut().as_transcript(), 
+                v.iter().map(|&(_,_,v,_)| v).collect::<Vec<_>>().as_slice(), 
+                v.iter().map(|&(_,_,_,v_blinding)| v_blinding).collect::<Vec<_>>().as_slice(),
+                B_x
+            )
+            .map(|(r,_)| vec![RangeProof(r)])
+            .map_err(|e| ProofError::RangeProofError(e))
+        }
+        #[cfg(not(feature = "rangeproof_batchable"))]
         Ok(
             self.constraints.to_owned().iter()
             .filter_map(|(_lhc, rhs_lc, range_proof)| match range_proof {

@@ -45,11 +45,15 @@ bincode = "1"
 sha2 = "0.10.8"
 
 [features]
+rangeproof_batchable = []
 rangeproof = []
 nightly = []
 debug-transcript = []
 bench = []
-default = ["u64_backend", "rangeproof"]
+default = ["u64_backend", "rangeproof", "rangeproof_batchable"]
 u32_backend = []
 u64_backend = []
 simd_backend = []
+
+[profile.test]
+inherits = "release"
