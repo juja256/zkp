@@ -255,6 +255,13 @@ impl<'a, G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: Borro
     fn require_range_proof(&mut self, constraint: usize) {
         assert!(matches!(self.points[self.constraints[constraint].0.0], Point::G2(_)), "Expected Point::G2, but found a different variant");
         assert!(self.constraints[constraint].1.len() == 2, "Expected 2 linear combinations, but found a different number");
+        #[cfg(feature = "rangeproof_batchable")]
+        let _ = self.constraints.iter().map(|(_lhs, rhc_lc, rp)| {
+            if let Some(_) = rp {
+                assert!(rhc_lc[0].1.0 == self.constraints[constraint].1[0].1.0, "All batchable range proofs commitments must be set under the same generators");
+                assert!(rhc_lc[1].1.0 == self.constraints[constraint].1[1].1.0, "All batchable range proofs commitments must be set under the same generators");
+            }
+        });
         self.constraints[constraint].2 = Some(());
     }
 }

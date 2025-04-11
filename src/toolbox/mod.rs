@@ -75,10 +75,10 @@ macro_rules! cast {
 
 
 /// A secret variable used during proving.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct ScalarVar(usize);
 /// A public variable used during proving.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct PointVar(usize);
 
 #[derive(Copy, Clone, Debug)]
