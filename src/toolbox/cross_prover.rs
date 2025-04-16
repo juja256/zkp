@@ -306,7 +306,9 @@ impl<G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: BorrowMut
 
     #[cfg(feature = "rangeproof")]
     fn require_range_proof(&mut self, constraint: usize) {
-        assert!(matches!(self.points[self.constraints[constraint].0.0], Point::G2(_)), "Expected Point::G2, but found a different variant");
+        if !matches!(self.points[self.constraints[constraint].0.0], Point::G2(_)) {
+            return; // skip if not G2
+        }
         assert!(self.constraints[constraint].1.len() == 2, "Expected 2 linear combinations, but found a different number");
         assert!(matches!(self.scalars[self.constraints[constraint].1[0].0.0], Scalar::Cross(_)), "Expected Scalar::Cross, but found a different variant");
         #[cfg(feature = "rangeproof_batchable")]

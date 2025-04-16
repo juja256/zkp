@@ -8,6 +8,7 @@
 //
 // Authors:
 // - Henry de Valence <hdevalence@hdevalence.ca>
+// - Yevhen Hrubiian <grubian.euhen@gmail.com>
 
 #[doc(hidden)]
 #[macro_export]
@@ -487,6 +488,71 @@ macro_rules! define_proof {
 }
 
 
+/// This macro is similar to [`define_proof!`] but is used for
+/// cross-domain proofs. The syntax is similar, but the
+/// secret variables are allowed to use different domains.
+/// The proof statement is  specified as a list of statements, each of which is
+/// a linear combination of public points and secret scalars from both domains.
+/// 
+/// For example, a proof of knowledge of openings to two Pedersen commitments
+/// across two groups is specified as:
+/// ```rust,ignore
+/// define_cross_proof! {
+///     pedersen, "Pedersen Proof", (x), (r), (s), (Com1), (Com2), (G1, H1), (G2, H2): 
+///     Com1 = (x * G1 + r * H1), Com2 = (x * G2 + s * H2) 
+/// } 
+/// ```
+/// This creates a module `pedersen` with code for proving knowledge of secret `x`
+/// that should be the same acrooss groups G1 and G2 in two Pedersen commitments 
+/// `Com1` and `Com2` for per-proof public parameters `Com1`, `Com2`, and common
+/// parameters `G1`, `H1`, `G2`, and `H2`. The UTF-8 string `"Pedersen Proof"`
+/// is added to the transcript as a domain separator.
+/// 
+/// In general the syntax is
+/// ```rust,ignore
+/// define_cross_proof!{
+///     module_name,   // all generated code for this statement goes here
+///     "Proof Label", // a UTF-8 domain separator unique to the statement
+///     (x,y,z,...),   // cross-domain secret variable labels (preferably lower-case)
+///     (r,s,t,...),   // secret variable labels in G1 (preferably lower-case)
+///     (u,v,w,...),   // secret variable labels in G2 (preferably lower-case)
+///     (A,B,C,...),   // public per-proof parameter labels in G1 (preferably upper-case)
+///     (D,E,F,...),   // public per-proof parameter labels in G2 (preferably upper-case)
+///     (G,H,I,...),   // public common parameter labels in G1 (preferably upper-case)
+///     (J,K,L,...),   // public common parameter labels in G2 (preferably upper-case)
+///     :
+///     LHS = (x * A + y * B + z * C + ... ),  // comma-separated statements
+///     ...
+/// }
+/// ```
+/// Statements have the form `LHS = (A * x + B * y + C * z + ... )`,
+/// where `LHS` is one of the points listed as a public parameter in G1 or G2, and
+/// the right-hand side is a sum of public points from `LHS` point's group multiplied by
+/// secret scalars from selected domain or cross-domain secret scalars
+/// 
+/// This macro generates group-agnostic code using generic types for elliptic curve groups 
+/// from ark-works. G1 and G2 must implement `AffineRepr` and their `ScalarFields` must not 
+/// exceed 256bits so that both could be converted to `BigInt<4>`. `B_x` generic constant is
+/// used to specify bitlength of the cross-domain scalars. In order to provide soundness of the
+/// proof, the `B_x` must be less than or equal to 64 (bits), `B_c` - challenge bitlength must 
+/// not be less then 128 for corresponding 128bit security. `B_f` controls probability of 
+/// prover aborting the proof generation, e.g. `B_f=56` means that the prover will abort 
+/// with probability 1/2^56.
+/// 
+/// If the G2 is specified as a [`ark_ed25519::EdwardsAffine`] and `rangeproof` feature is
+/// enabled, the macro will also generate code to support range proofs using dalek's [`bulletproofs`],
+/// converting G2 points to RistrettoPoints under the hood. In order to request the range proof 
+/// for cross-domain scalar `x` name the `LHS` variable as `Com_x` placing prefix `Com` before the
+/// varialbe name, if so the `Com_x` must specify Pedersen commitment for `x` in the G2 group.
+/// One can also use `Com_x` for G1 group, but in this case the range proof requirement will be
+/// ignored because range proving system completely relies on G2 arithmetic. 
+/// 
+/// If `rangeproof_batchable` feature is enabled, the macro will also generate code to support 
+/// batch compression and verification of range proofs using [`bulletproofs`], additionally
+/// one must verify that all `Com_x` commitments uses the same basis.
+/// 
+/// Proof creation is done in constant time.  Proof verification uses
+/// variable-time code.
 #[macro_export]
 macro_rules! define_cross_proof {
     (

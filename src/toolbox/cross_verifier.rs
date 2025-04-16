@@ -253,7 +253,9 @@ impl<'a, G1: AffineRepr, G2: AffineRepr, U: TranscriptProtocol<G1, G2>, T: Borro
 
     #[cfg(feature = "rangeproof")]
     fn require_range_proof(&mut self, constraint: usize) {
-        assert!(matches!(self.points[self.constraints[constraint].0.0], Point::G2(_)), "Expected Point::G2, but found a different variant");
+        if !matches!(self.points[self.constraints[constraint].0.0], Point::G2(_)) {
+            return; // skip if not G2
+        }
         assert!(self.constraints[constraint].1.len() == 2, "Expected 2 linear combinations, but found a different number");
         #[cfg(feature = "rangeproof_batchable")]
         let _ = self.constraints.iter().map(|(_lhs, rhc_lc, rp)| {
