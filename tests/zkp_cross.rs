@@ -30,7 +30,7 @@ use ark_ec::VariableBaseMSM;
 use zkp::{toolbox::Scalar, BatchableProof, CompactCrossProof, CompactProof, Transcript};
 
 define_cross_proof! {
-    dleq, 
+    comeq, 
     "{(Q, Com(x), G_1, G_2, H_2); (x, s) | Q = [x]G_1 ∈ G1 & Com(x) = [x]G_2 + [s]H_2 ∈ G2}", 
     (x0, x1, x2, x3), 
     (r0, r1, r2, r3), 
@@ -102,9 +102,9 @@ fn create_and_verify_cross_group() {
         ).unwrap().into_affine();
 
         let mut transcript = Transcript::new(b"discrete log equality among groups");
-        dleq::prove_cross::<G1Affine, 64, 128, 40>(
+        comeq::prove_cross::<G1Affine, 64, 128, 40>(
             &mut transcript,
-            dleq::ProveAssignments {
+            comeq::ProveAssignments {
                 x0: &x0,
                 x1: &x1,
                 x2: &x2,
@@ -140,14 +140,14 @@ fn create_and_verify_cross_group() {
 
     let proof_bytes = proof.to_bytes().unwrap();
     println!("{:?}", proof_bytes.len());
-    let parsed_proof: dleq::CompactCrossProof<F1, F2> = CompactCrossProof::from_bytes(&proof_bytes).unwrap();
+    let parsed_proof: comeq::CompactCrossProof<F1, F2> = CompactCrossProof::from_bytes(&proof_bytes).unwrap();
 
     // Verifier logic
     let mut transcript = Transcript::new(b"discrete log equality among groups");
-    assert!(dleq::verify_cross::<G1Affine, 64, 128, 40>(
+    assert!(comeq::verify_cross::<G1Affine, 64, 128, 40>(
         &parsed_proof,
         &mut transcript,
-        dleq::VerifyAssignments {
+        comeq::VerifyAssignments {
             A0: &points.A0,
             A1: &points.A1,
             A2: &points.A2,
@@ -185,10 +185,10 @@ fn create_and_verify_batchable() {
         let A = (G * x + H * r1).into_affine();
         let B = (G * x + H * r2).into_affine();
 
-        let mut transcript = Transcript::new(b"DLEQTest");
-        dleq::prove_batchable(
+        let mut transcript = Transcript::new(b"comeqTest");
+        comeq::prove_batchable(
             &mut transcript,
-            dleq::ProveAssignments {
+            comeq::ProveAssignments {
                 x: &x,
                 r1: &r1,
                 r2: &r2,
@@ -202,14 +202,14 @@ fn create_and_verify_batchable() {
     
     let proof_bytes = proof.to_bytes().unwrap();
     println!("{:?}\n{:?}\n{:?}", proof.commitments, proof.responses, proof_bytes);
-    let parsed_proof: dleq::BatchableProof<_> = BatchableProof::from_bytes(&proof_bytes).unwrap();
+    let parsed_proof: comeq::BatchableProof<_> = BatchableProof::from_bytes(&proof_bytes).unwrap();
 
     // Verifier logic
-    let mut transcript = Transcript::new(b"DLEQTest");
-    assert!(dleq::verify_batchable(
+    let mut transcript = Transcript::new(b"comeqTest");
+    assert!(comeq::verify_batchable(
         &parsed_proof,
         &mut transcript,
-        dleq::VerifyAssignments {
+        comeq::VerifyAssignments {
             A: &points.A,
             B: &points.B,
             G: &G,
@@ -245,10 +245,10 @@ fn create_batch_and_batch_verify() {
             let A = (G * x + H * r1).into_affine();
             let B = (G * x + H * r2).into_affine();
 
-            let mut transcript = Transcript::new(b"DLEQTest");
-            let (proof, points) = dleq::prove_batchable(
+            let mut transcript = Transcript::new(b"comeqTest");
+            let (proof, points) = comeq::prove_batchable(
                 &mut transcript,
-                dleq::ProveAssignments {
+                comeq::ProveAssignments {
                     x: &x,
                     r1: &r1,
                     r2: &r2,
@@ -268,12 +268,12 @@ fn create_batch_and_batch_verify() {
     };
 
     // Verifier logic
-    let mut transcripts = vec![Transcript::new(b"DLEQTest"); messages.len()];
+    let mut transcripts = vec![Transcript::new(b"comeqTest"); messages.len()];
 
-    assert!(dleq::batch_verify(
+    assert!(comeq::batch_verify(
         &proofs,
         transcripts.iter_mut().collect(),
-        dleq::BatchVerifyAssignments {
+        comeq::BatchVerifyAssignments {
             A: pubkeys,
             B: vrf_outputs,
             H: H,
