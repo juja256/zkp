@@ -198,7 +198,7 @@ impl<G1: AffineRepr, U: TranscriptProtocol<G1, EdwardsAffine>, T: BorrowMut<U>, 
                     None => None,
                 }).collect::<Vec<_>>();
             range_proofs[0].0.verify_multiple(
-                &BulletproofGens::new(B_x, 16), 
+                &BulletproofGens::new(B_x, 64), 
                 &PedersenGens { B: ark_to_ristretto255(v[0].0).unwrap(), B_blinding: ark_to_ristretto255(v[0].1).unwrap() },
                 self.transcript.borrow_mut().as_transcript(), 
                 v.iter().map(|&(_,_,v)| v.compress()).collect::<Vec<_>>().as_slice(), 
