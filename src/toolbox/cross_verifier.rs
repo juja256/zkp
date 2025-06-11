@@ -188,7 +188,7 @@ impl<G1: AffineRepr, U: TranscriptProtocol<G1, EdwardsAffine>, T: BorrowMut<U>, 
             if range_proofs.len() != 1 {
                 return Err(ProofError::ParsingFailure);
             }
-            let v = self.constraints.to_owned().iter()
+            let mut v = self.constraints.to_owned().iter()
                 .filter_map(|(lhs, rhs_lc, range_proof)| match range_proof {
                     Some(_) => {
                         let (G, H) = (cast!(self.points[rhs_lc[0].1.0], Point::G2), cast!(self.points[rhs_lc[1].1.0], Point::G2));
@@ -197,6 +197,9 @@ impl<G1: AffineRepr, U: TranscriptProtocol<G1, EdwardsAffine>, T: BorrowMut<U>, 
                     },
                     None => None,
                 }).collect::<Vec<_>>();
+
+            let extra = v.iter().take((1 << ((v.len() as f64).log2().ceil() as usize)) - v.len()).cloned().collect::<Vec<_>>();
+            v.extend(extra); // pad to the next power of two
             range_proofs[0].0.verify_multiple(
                 &BulletproofGens::new(B_x, 64), 
                 &PedersenGens { B: ark_to_ristretto255(v[0].0).unwrap(), B_blinding: ark_to_ristretto255(v[0].1).unwrap() },

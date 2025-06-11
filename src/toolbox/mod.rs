@@ -45,6 +45,7 @@ pub mod verifier;
 
 pub mod cross_verifier;
 
+pub mod cross_dleq;
 pub mod dalek_ark;
 
 use std::convert::TryInto;
