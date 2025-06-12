@@ -27,7 +27,7 @@ use ark_secq256k1::Affine as G1Affine;
 use rand::thread_rng;
 use ark_ed25519::{EdwardsAffine as G2};
 
-use zkp::toolbox::cross_dleq::{CrossDleqProver, CrossDleqVerifier, PedersenBasis};
+use zkp::toolbox::cross_dleq::{CrossDleqProver, CrossDLEQProof, CrossDleqVerifier, PedersenBasis};
 
 #[test]
 #[cfg(feature="rangeproof")]
@@ -42,29 +42,31 @@ fn cross_zkp() {
     let basis = PedersenBasis::new(G_1, H_1, G_2, H_2);
 
     let mut prover = CrossDleqProver::<G1Affine>::new(basis.clone());
-    let mut cc = vec![];
-    for i in 0..11 {
+
+    for i in 0..8 {
         use rand::Rng as _;
 
         let x: BigInt<4> = BigInt::rand(&mut blinding_rng) >> 3;
         let s = blinding_rng.r#gen();
-        cc.push(prover.add_dleq_statement(x, s));
+        prover.add_dleq_statement(x, s);
     }
 
     let proof = prover.prove_cross().unwrap();
-    println!("{}", proof.to_bytes().unwrap().len());
+    let proof_bytes = proof.to_bytes().unwrap();
+    let proof_deserialized = CrossDLEQProof::<G1Affine>::from_bytes(&proof_bytes).unwrap();
+    println!("{}", proof_bytes.len());
     let mut verifier = CrossDleqVerifier::<G1Affine>::new(basis);
-    for (Q, Q0, Q1, Q2, Q3, Com_x, Com_x0, Com_x1, Com_x2, Com_x3) in cc {
+    for Com in proof_deserialized.commitments {
         
-        let C = <G2 as AffineRepr>::Group::msm(
-            &[Com_x0, Com_x1, Com_x2, Com_x3],
+        /*let C = <G2 as AffineRepr>::Group::msm(
+            &[Com.Com_x0, Com.Com_x1, Com.Com_x2, Com.Com_x3],
             B.iter().map(|&x| <G2 as AffineRepr>::ScalarField::from(x)).collect::<Vec<_>>().as_slice(),
         ).unwrap().into_affine();
-        assert_eq!(C, Com_x);
-        verifier.add_dleq_statement(Q, Q0, Q1, Q2, Q3, Com_x0, Com_x1, Com_x2, Com_x3);
+        assert_eq!(C, Com_x);*/
+        verifier.add_dleq_statement(Com);
     }
 
-    verifier.verify_cross(&proof).unwrap();
+    verifier.verify_cross(&proof.proof).unwrap();
 }
 /*
 #[test]

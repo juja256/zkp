@@ -1,9 +1,12 @@
+use std::io::Cursor;
+
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::{BigInt, PrimeField, UniformRand};
 
+use ark_serialize::{CanonicalSerialize, CanonicalDeserialize};
 use rand::thread_rng;
 use crate::toolbox::{cross_prover::CrossProver, cross_verifier::CrossVerifier, SchnorrCS, PointVar, Point, Scalar, ScalarVar};
-use crate::CompactCrossProof;
+use crate::{CompactCrossProof, ProofError};
 use crate::Transcript;
 use ark_ed25519::{EdwardsAffine as G2, Fr as F2};
 
@@ -31,11 +34,56 @@ struct PedersenBasisVars {
     H_2: PointVar,
 }
 
+#[derive(Clone, CanonicalSerialize, CanonicalDeserialize)]
+pub struct CrossDLEQCommitments<G1: AffineRepr, G2: AffineRepr> {
+    pub Q: G1,
+    pub Q0: G1,
+    pub Q1: G1,
+    pub Q2: G1,
+    pub Q3: G1,
+    pub Com_x0: G2,
+    pub Com_x1: G2,
+    pub Com_x2: G2,
+    pub Com_x3: G2,
+}
+
+#[derive(Clone, CanonicalSerialize, CanonicalDeserialize)]
+pub struct CrossDLEQProof<G1: AffineRepr>
+    where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
+        <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
+    pub proof: CompactCrossProof<G1::ScalarField, F2>,
+    pub commitments: Vec<CrossDLEQCommitments<G1, G2>>,
+}
+
+impl<G1: AffineRepr> CrossDLEQProof<G1> 
+    where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
+        <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, ProofError> {
+        let mut cursor = Cursor::new(Vec::new());
+        self.serialize_compressed(&mut cursor).map_err(|_| ProofError::ParsingFailure)?;
+        Ok(cursor.into_inner())
+    }
+
+    /// Deserializes the proof from a byte slice.
+    ///
+    /// Returns an error if the byte slice cannot be parsed into a `R1CSProof`.
+    pub fn from_bytes(slice: &[u8]) -> Result<CrossDLEQProof<G1>, ProofError> {
+        let mut cursor = Cursor::new(slice);
+        let proof = CrossDLEQProof::<G1>::deserialize_compressed(&mut cursor);
+        if proof.is_ok() {
+            Ok(proof.unwrap())
+        } else {
+            Err(ProofError::ParsingFailure)
+        }
+    }
+}
+
 /// CrossDleqProver is a prover builder for cross group DLEQ statements.
 pub struct CrossDleqProver<G1: AffineRepr>
     where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
         <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
-
+    
+    commitments: Vec<CrossDLEQCommitments<G1, G2>>,
     prover: CrossProver<G1, G2, Transcript, Transcript, 64, 128, 56>,
     basis: PedersenBasis<G1, G2>,
     basis_vars: PedersenBasisVars,
@@ -62,6 +110,7 @@ impl<G1: AffineRepr> CrossDleqProver<G1> where BigInt<4>: From<<G1::ScalarField 
         Self {
             prover,
             basis,
+            commitments: vec![],
             basis_vars: PedersenBasisVars {
                 G_1: var_G1,
                 G_1_1: var_G1_1,
@@ -105,7 +154,7 @@ impl<G1: AffineRepr> CrossDleqProver<G1> where BigInt<4>: From<<G1::ScalarField 
         &mut self,
         x: BigInt<4>,
         s: <G2 as AffineRepr>::ScalarField,
-    ) -> (G1, G1, G1, G1, G1, G2, G2, G2, G2, G2) {
+    ) {
         let B: Vec<BigInt<4>> = (0..4).map(|x| BigInt::from(1u64.into()) << x*64).collect();
         let x0 = BigInt::<4>::from(x.0[0].into());
         let x1 = BigInt::<4>::from(x.0[1].into());
@@ -207,12 +256,28 @@ impl<G1: AffineRepr> CrossDleqProver<G1> where BigInt<4>: From<<G1::ScalarField 
             self.basis_vars.H_2,
         );
         self.prover.constrain(var_Q, vec![(var_x0, self.basis_vars.G_1), (var_x1, self.basis_vars.G_1_1), (var_x2, self.basis_vars.G_1_2), (var_x3, self.basis_vars.G_1_3)]);
-        (Q, Q0, Q1, Q2, Q3, Com_x, Com_x0, Com_x1, Com_x2, Com_x3)
+        let c = CrossDLEQCommitments {
+            Q,
+            Q0,
+            Q1,
+            Q2,
+            Q3,
+            Com_x0,
+            Com_x1,
+            Com_x2,
+            Com_x3,
+        };
+        self.commitments.push(c);
     }
 
     /// Proves the cross group statements
-    pub fn prove_cross(self) -> Result<CompactCrossProof<G1::ScalarField, F2>, crate::ProofError> {
-        self.prover.prove_cross()
+    pub fn prove_cross(self) -> Result<CrossDLEQProof<G1>, crate::ProofError> {
+        let cross_proof = self.prover.prove_cross()?;
+
+        Ok(CrossDLEQProof {
+            proof: cross_proof,
+            commitments: self.commitments,
+        })
     }
 }
 
@@ -280,7 +345,18 @@ impl<G1: AffineRepr> CrossDleqVerifier<G1> where BigInt<4>: From<<G1::ScalarFiel
         self.verifier.constrain(var_Q, vec![(var_x, self.basis_vars.G_1)]);
     }
 
-    pub fn add_dleq_statement(&mut self, Q: G1, Q0: G1, Q1: G1, Q2: G1, Q3: G1, Com_x0: G2, Com_x1: G2, Com_x2: G2, Com_x3: G2) {
+    pub fn add_dleq_statement(&mut self, commitment: CrossDLEQCommitments<G1, G2>) {
+        let CrossDLEQCommitments {
+            Q,
+            Q0,
+            Q1,
+            Q2,
+            Q3,
+            Com_x0,
+            Com_x1,
+            Com_x2,
+            Com_x3,
+        } = commitment;
         let var_x0 = self.verifier.allocate_scalar(b"x0");
         let var_x1 = self.verifier.allocate_scalar(b"x1");
         let var_x2 = self.verifier.allocate_scalar(b"x2");
