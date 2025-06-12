@@ -17,6 +17,8 @@ extern crate serde;
 extern crate sha2;
 extern crate zkp;
 
+use ark_ec::CurveGroup as _;
+use ark_ec::VariableBaseMSM;
 use ark_ec::{AffineRepr};
 use ark_ff::{BigInt, UniformRand};
 
@@ -30,24 +32,35 @@ use zkp::toolbox::cross_dleq::{CrossDleqProver, CrossDleqVerifier, PedersenBasis
 #[test]
 #[cfg(feature="rangeproof")]
 fn cross_zkp() {
-    let B = G1Affine::generator();
-    let H = G1Affine::rand(&mut thread_rng());
+    let B: Vec<BigInt<4>> = (0..4).map(|x| BigInt::from(1u64) << x*64).collect();
+    let mut blinding_rng = rand::thread_rng();
+    let G_1 = G1Affine::generator();
+    let H_1 = G1Affine::rand(&mut thread_rng());
     let G_2 = G2::generator();
     let H_2 = G2::rand(&mut thread_rng());
 
-    let basis = PedersenBasis::new(B, H, G_2, H_2);
+    let basis = PedersenBasis::new(G_1, H_1, G_2, H_2);
 
     let mut prover = CrossDleqProver::<G1Affine>::new(basis.clone());
     let mut cc = vec![];
     for i in 0..11 {
-        let x: BigInt<4> = BigInt::rand(&mut thread_rng()) >> 3;
-        cc.push(prover.add_dleq_statement(x));
+        use rand::Rng as _;
+
+        let x: BigInt<4> = BigInt::rand(&mut blinding_rng) >> 3;
+        let s = blinding_rng.r#gen();
+        cc.push(prover.add_dleq_statement(x, s));
     }
 
     let proof = prover.prove_cross().unwrap();
     println!("{}", proof.to_bytes().unwrap().len());
     let mut verifier = CrossDleqVerifier::<G1Affine>::new(basis);
-    for (Q, Q0, Q1, Q2, Q3, Com_x0, Com_x1, Com_x2, Com_x3) in cc {
+    for (Q, Q0, Q1, Q2, Q3, Com_x, Com_x0, Com_x1, Com_x2, Com_x3) in cc {
+        
+        let C = <G2 as AffineRepr>::Group::msm(
+            &[Com_x0, Com_x1, Com_x2, Com_x3],
+            B.iter().map(|&x| <G2 as AffineRepr>::ScalarField::from(x)).collect::<Vec<_>>().as_slice(),
+        ).unwrap().into_affine();
+        assert_eq!(C, Com_x);
         verifier.add_dleq_statement(Q, Q0, Q1, Q2, Q3, Com_x0, Com_x1, Com_x2, Com_x3);
     }
 

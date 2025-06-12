@@ -1,4 +1,4 @@
-use ark_ec::{AffineRepr, CurveGroup};
+use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
 use ark_ff::{BigInt, PrimeField, UniformRand};
 
 use rand::thread_rng;
@@ -15,8 +15,7 @@ pub struct PedersenBasis<G1: AffineRepr, G2: AffineRepr> {
     H_2: G2,
 }
 
-impl<G1: AffineRepr, G2: AffineRepr> PedersenBasis<G1, G2> 
-{
+impl<G1: AffineRepr, G2: AffineRepr> PedersenBasis<G1, G2> {
     pub fn new(G_1: G1, H_1: G1, G_2: G2, H_2: G2) -> Self {
         Self { G_1, H_1, G_2, H_2 }
     }   
@@ -32,8 +31,7 @@ struct PedersenBasisVars {
     H_2: PointVar,
 }
 
-/// CrossDleqProver and CrossDleqVerifier are used to create and verify cross group proofs for the following relation:
-/// R_{DLEQ} = { (Com_x ∈ 𝔾_2, Q ∈ 𝔾_1; x, r) | Com_x = x * G_1 + r * H_1, Q = x * G_2 }
+/// CrossDleqProver is a prover builder for cross group DLEQ statements.
 pub struct CrossDleqProver<G1: AffineRepr>
     where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
         <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
@@ -93,10 +91,22 @@ impl<G1: AffineRepr> CrossDleqProver<G1> where BigInt<4>: From<<G1::ScalarField 
         self.prover.require_range_proof(c2);
     }
 
+    /// Adds a discrete log statement R_{DL} = { (Q ∈ 𝔾_1; x) | Q = x * G_1 }
+    pub fn add_dl_statement(&mut self, x: G1::ScalarField) -> G1 {
+        let var_x = self.prover.allocate_scalar(b"x", Scalar::F1(x)).unwrap();
+        let Q = (self.basis.G_1 * x).into_affine();
+        let var_Q = self.prover.allocate_point(b"Q", Point::G1(Q));
+        self.prover.constrain(var_Q, vec![(var_x, self.basis_vars.G_1)]);
+        Q
+    }
+
+    /// Adds a cross DLEQ statement R_{DLEQ} = { (Com_x ∈ 𝔾_2, Q ∈ 𝔾_1; x, r) | Com_x = x * G_1 + r * H_1, Q = x * G_2 }
     pub fn add_dleq_statement(
         &mut self,
         x: BigInt<4>,
-    ) -> (G1, G1, G1, G1, G1, G2, G2, G2, G2) {
+        s: <G2 as AffineRepr>::ScalarField,
+    ) -> (G1, G1, G1, G1, G1, G2, G2, G2, G2, G2) {
+        let B: Vec<BigInt<4>> = (0..4).map(|x| BigInt::from(1u64.into()) << x*64).collect();
         let x0 = BigInt::<4>::from(x.0[0].into());
         let x1 = BigInt::<4>::from(x.0[1].into());
         let x2 = BigInt::<4>::from(x.0[2].into());
@@ -107,10 +117,11 @@ impl<G1: AffineRepr> CrossDleqProver<G1> where BigInt<4>: From<<G1::ScalarField 
         let r2 = G1::ScalarField::rand(&mut thread_rng());
         let r3 = G1::ScalarField::rand(&mut thread_rng());
 
-        let s0 = F2::rand(&mut thread_rng());
-        let s1 = F2::rand(&mut thread_rng());
-        let s2 = F2::rand(&mut thread_rng());
-        let s3 = F2::rand(&mut thread_rng());
+        let s = s.into_bigint();
+        let s0 = F2::from(BigInt::from(s.0[0].into()));
+        let s1 = F2::from(BigInt::from(s.0[1].into()));
+        let s2 = F2::from(BigInt::from(s.0[2].into()));
+        let s3 = F2::from(BigInt::from(s.0[3].into()));
 
         let Q = (self.basis.G_1 * G1::ScalarField::from_bigint(x.into()).unwrap()).into_affine();
         let Q0 = (self.basis.G_1 * G1::ScalarField::from_bigint(x0.into()).unwrap() + self.basis.H_1 * r0).into_affine();
@@ -122,6 +133,10 @@ impl<G1: AffineRepr> CrossDleqProver<G1> where BigInt<4>: From<<G1::ScalarField 
         let Com_x1 = (self.basis.G_2 * F2::from(x1) + self.basis.H_2 * s1).into_affine();
         let Com_x2 = (self.basis.G_2 * F2::from(x2) + self.basis.H_2 * s2).into_affine();
         let Com_x3 = (self.basis.G_2 * F2::from(x3) + self.basis.H_2 * s3).into_affine();
+        let Com_x = <G2 as AffineRepr>::Group::msm(
+            &[Com_x0, Com_x1, Com_x2, Com_x3],
+            B.iter().map(|&x| F2::from(x)).collect::<Vec<_>>().as_slice(),
+        ).unwrap().into_affine();
 
         let var_x0 = self.prover.allocate_scalar(b"x0", Scalar::Cross(x0)).unwrap();
         let var_x1 = self.prover.allocate_scalar(b"x1", Scalar::Cross(x1)).unwrap();
@@ -192,14 +207,16 @@ impl<G1: AffineRepr> CrossDleqProver<G1> where BigInt<4>: From<<G1::ScalarField 
             self.basis_vars.H_2,
         );
         self.prover.constrain(var_Q, vec![(var_x0, self.basis_vars.G_1), (var_x1, self.basis_vars.G_1_1), (var_x2, self.basis_vars.G_1_2), (var_x3, self.basis_vars.G_1_3)]);
-        (Q, Q0, Q1, Q2, Q3, Com_x0, Com_x1, Com_x2, Com_x3)
+        (Q, Q0, Q1, Q2, Q3, Com_x, Com_x0, Com_x1, Com_x2, Com_x3)
     }
 
+    /// Proves the cross group statements
     pub fn prove_cross(self) -> Result<CompactCrossProof<G1::ScalarField, F2>, crate::ProofError> {
         self.prover.prove_cross()
     }
 }
 
+/// CrossDleqVerifier is a verifier builder for cross group DLEQ statements.
 pub struct CrossDleqVerifier<G1: AffineRepr>
     where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
         <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
@@ -255,6 +272,12 @@ impl<G1: AffineRepr> CrossDleqVerifier<G1> where BigInt<4>: From<<G1::ScalarFiel
         self.verifier.constrain(Com1, vec![(x, G_1), (r, H_1)]);
         let c2 = self.verifier.constrain(Com2, vec![(x, G_2), (s, H_2)]);
         self.verifier.require_range_proof(c2);
+    }
+
+    pub fn add_dl_statement(&mut self, Q: G1) {
+        let var_x = self.verifier.allocate_scalar(b"x");
+        let var_Q = self.verifier.allocate_point(b"Q", Point::G1(Q)).unwrap();
+        self.verifier.constrain(var_Q, vec![(var_x, self.basis_vars.G_1)]);
     }
 
     pub fn add_dleq_statement(&mut self, Q: G1, Q0: G1, Q1: G1, Q2: G1, Q3: G1, Com_x0: G2, Com_x1: G2, Com_x2: G2, Com_x3: G2) {

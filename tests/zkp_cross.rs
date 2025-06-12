@@ -76,10 +76,10 @@ fn create_and_verify_cross_group() {
         let r2 = F1::rand(&mut thread_rng());
         let r3 = F1::rand(&mut thread_rng());
 
-        let s0 = F2::rand(&mut thread_rng());
-        let s1 = F2::rand(&mut thread_rng());
-        let s2 = F2::rand(&mut thread_rng());
-        let s3 = F2::rand(&mut thread_rng());
+        let s0 = F2::from(BigInt::from(s.0[0]));
+        let s1 = F2::from(BigInt::from(s.0[1]));
+        let s2 = F2::from(BigInt::from(s.0[2]));
+        let s3 = F2::from(BigInt::from(s.0[3]));
 
         let A0 = (G[0] * F1::from(x0) + H_1 * r0).into_affine();
         let A1 = (G[0] * F1::from(x1) + H_1 * r1).into_affine();
