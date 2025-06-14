@@ -5,15 +5,25 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{AdditiveGroup as _, BigInteger, Field, MontConfig, Zero};
 use ark_ff::{BigInt, PrimeField, UniformRand, One};
 use ark_serialize::CanonicalDeserialize;
-use curve25519_dalek::{constants as dalek_constants, edwards};
+use curve25519_dalek::{constants as dalek_constants, edwards, Scalar};
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 //use group::{Group, GroupEncoding};
 
 use ark_ed25519::EdwardsAffine as ArkEdwardsAffine;
 
-use ark_ed25519::{Fq, FqConfig, EdwardsConfig};
+use ark_ed25519::{Fq, Fr, EdwardsConfig};
 use group::{Group as _, GroupEncoding as _};
 use rand::thread_rng;
+
+pub fn scalar_to_ark(scalar: &Scalar) -> Fr {
+    let bytes: [u8; 32] = scalar.to_bytes();
+    Fr::from_le_bytes_mod_order(&bytes)
+}
+
+pub fn ark_to_scalar(scalar: &Fr) -> Scalar {
+    let bytes = scalar.into_bigint().to_bytes_le();
+    Scalar::from_bytes_mod_order(bytes.try_into().expect("Slice with incorrect length"))
+}
 
 fn is_negative(x: &Fq) -> bool {
     x.into_bigint().to_bytes_le()[0] & 1 == 1
