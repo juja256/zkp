@@ -12,10 +12,10 @@ use ark_ed25519::{EdwardsAffine as G2, Fr as F2};
 
 #[derive(Clone)]
 pub struct PedersenBasis<G1: AffineRepr, G2: AffineRepr> {
-    G_1: G1,
-    H_1: G1,
-    G_2: G2,
-    H_2: G2,
+    pub G_1: G1,
+    pub H_1: G1,
+    pub G_2: G2,
+    pub H_2: G2,
 }
 
 impl<G1: AffineRepr, G2: AffineRepr> PedersenBasis<G1, G2> {
