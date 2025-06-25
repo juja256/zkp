@@ -25,8 +25,7 @@ use ark_ed25519::EdwardsAffine as ArkEdwardsAffine;
 use curve25519_dalek::RistrettoPoint;
 use rand::thread_rng;
 
-
-use zkp::{BatchableProof, CompactProof, Transcript};
+use zkp::{toolbox::{FromBytes as _, ToBytes as _}, BatchableProof, CompactProof, Transcript};
 
 define_proof! {dleq, "Com(x, r1), Com(x, r2) Proof", (x, r1, r2), (A, B), (G, H) : A = (x * G + r1 * H), B = (x * G + r2 * H) }
 

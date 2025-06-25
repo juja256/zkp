@@ -4,7 +4,7 @@ name = "zkp"
 # - update CHANGELOG
 # - update html_root_url
 # - update README if required by semver
-version = "0.9.2"
+version = "0.9.3"
 authors = ["Henry de Valence <hdevalence@hdevalence.ca>", "Yevhen Hrubiian <grubian.euhen@gmail.com>"]
 edition = "2018"
 license = "CC0-1.0"

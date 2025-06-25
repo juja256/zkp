@@ -49,6 +49,7 @@ pub mod cross_dleq;
 pub mod dalek_ark;
 
 use std::convert::TryInto;
+use std::io::Cursor;
 
 use ark_ff::{BigInt, Field, PrimeField, UniformRand};
 use ark_ec::AffineRepr;
@@ -74,6 +75,20 @@ macro_rules! cast {
     };
 }
 
+pub trait ToBytes : CanonicalSerialize {
+    fn to_bytes(&self) -> Result<Vec<u8>, SerializationError> {
+        let mut cursor = Cursor::new(Vec::new());
+        self.serialize_compressed(&mut cursor)?;
+        Ok(cursor.into_inner())
+    }
+}
+
+pub trait FromBytes : CanonicalDeserialize {
+    fn from_bytes(slice: &[u8]) -> Result<Self, SerializationError> {
+        let mut cursor = Cursor::new(slice);
+        Self::deserialize_compressed(&mut cursor)
+    }
+}
 
 /// A secret variable used during proving.
 #[derive(Copy, Clone, Debug)]

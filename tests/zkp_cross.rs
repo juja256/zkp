@@ -27,7 +27,7 @@ use rand::thread_rng;
 use group::Group;
 use ark_ec::VariableBaseMSM;
 
-use zkp::{toolbox::Scalar, BatchableProof, CompactCrossProof, CompactProof, Transcript};
+use zkp::{toolbox::{FromBytes as _, Scalar, ToBytes as _}, BatchableProof, CompactCrossProof, CompactProof, Transcript};
 
 define_cross_proof! {
     comeq, 

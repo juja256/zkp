@@ -4,7 +4,7 @@ use ark_ec::AffineRepr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError};
 use ark_ff::{BigInt, PrimeField};
 use curve25519_dalek::ristretto::CompressedRistretto;
-use crate::toolbox::{Challenge, Scalar};
+use crate::toolbox::{Challenge, FromBytes, Scalar, ToBytes};
 
 use crate::ProofError;
 /// A Schnorr proof in compact format.
@@ -25,26 +25,8 @@ pub struct CompactProof<F: PrimeField> {
     pub responses: Vec<F>,
 }
 
-impl<F: PrimeField> CompactProof<F> {
-    pub fn to_bytes(&self) -> Result<Vec<u8>, ProofError> {
-        let mut cursor = Cursor::new(Vec::new());
-        self.serialize_compressed(&mut cursor).map_err(|_| ProofError::ParsingFailure)?;
-        Ok(cursor.into_inner())
-    }
-
-    /// Deserializes the proof from a byte slice.
-    ///
-    /// Returns an error if the byte slice cannot be parsed into a `R1CSProof`.
-    pub fn from_bytes(slice: &[u8]) -> Result<CompactProof<F>, ProofError> {
-        let mut cursor = Cursor::new(slice);
-        let proof = CompactProof::<F>::deserialize_compressed(&mut cursor);
-        if proof.is_ok() {
-            Ok(proof.unwrap())
-        } else {
-            Err(ProofError::ParsingFailure)
-        }
-    }
-}
+impl<F: PrimeField> ToBytes for CompactProof<F> {}
+impl<F: PrimeField> FromBytes for CompactProof<F> {}
 
 /// A Schnorr proof in batchable format.
 ///
@@ -58,26 +40,8 @@ pub struct BatchableProof<G: AffineRepr> {
     pub responses: Vec<G::ScalarField>,
 }
 
-impl<G: AffineRepr> BatchableProof<G> {
-    pub fn to_bytes(&self) -> Result<Vec<u8>, ProofError> {
-        let mut cursor = Cursor::new(Vec::new());
-        self.serialize_compressed(&mut cursor).map_err(|_| ProofError::ParsingFailure)?;
-        Ok(cursor.into_inner())
-    }
-
-    /// Deserializes the proof from a byte slice.
-    ///
-    /// Returns an error if the byte slice cannot be parsed into a `R1CSProof`.
-    pub fn from_bytes(slice: &[u8]) -> Result<BatchableProof<G>, ProofError> {
-        let mut cursor = Cursor::new(slice);
-        let proof = BatchableProof::<G>::deserialize_compressed(&mut cursor);
-        if proof.is_ok() {
-            Ok(proof.unwrap())
-        } else {
-            Err(ProofError::ParsingFailure)
-        }
-    }
-}
+impl<G: AffineRepr> ToBytes for BatchableProof<G> {}
+impl<G: AffineRepr> FromBytes for BatchableProof<G> {}
 
 #[derive(Clone)]
 pub struct RangeProof (
@@ -141,25 +105,10 @@ pub struct CompactCrossProof<F1: PrimeField, F2: PrimeField>
     pub range_proofs: Vec<RangeProof>,
 }
 
-impl<F1: PrimeField, F2: PrimeField> CompactCrossProof<F1, F2> 
+impl<F1: PrimeField, F2: PrimeField> ToBytes for CompactCrossProof<F1, F2> 
     where F1::BigInt: Into<BigInt<4>>, 
-          F2::BigInt: Into<BigInt<4>> {
-    pub fn to_bytes(&self) -> Result<Vec<u8>, ProofError> {
-        let mut cursor = Cursor::new(Vec::new());
-        self.serialize_compressed(&mut cursor).map_err(|_| ProofError::ParsingFailure)?;
-        Ok(cursor.into_inner())
-    }
+          F2::BigInt: Into<BigInt<4>> {}
 
-    /// Deserializes the proof from a byte slice.
-    ///
-    /// Returns an error if the byte slice cannot be parsed into a `R1CSProof`.
-    pub fn from_bytes(slice: &[u8]) -> Result<CompactCrossProof<F1, F2>, ProofError> {
-        let mut cursor = Cursor::new(slice);
-        let proof = CompactCrossProof::<F1, F2>::deserialize_compressed(&mut cursor);
-        if proof.is_ok() {
-            Ok(proof.unwrap())
-        } else {
-            Err(ProofError::ParsingFailure)
-        }
-    }
-}
+impl<F1: PrimeField, F2: PrimeField> FromBytes for CompactCrossProof<F1, F2> 
+    where F1::BigInt: Into<BigInt<4>>, 
+          F2::BigInt: Into<BigInt<4>> {}
