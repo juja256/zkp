@@ -1,3 +1,4 @@
+use std::borrow::BorrowMut as _;
 use std::io::Cursor;
 
 use ark_ec::{AffineRepr, CurveGroup, VariableBaseMSM};
@@ -79,21 +80,20 @@ impl<G1: AffineRepr> CrossDLEQProof<G1>
 }
 
 /// CrossDleqProver is a prover builder for cross group DLEQ statements.
-pub struct CrossDleqProver<G1: AffineRepr>
+pub struct CrossDleqProver<'a, G1: AffineRepr>
     where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
         <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
     
     commitments: Vec<CrossDLEQCommitments<G1, G2>>,
-    prover: CrossProver<G1, G2, Transcript, Transcript, 64, 128, 56>,
+    prover: CrossProver<G1, G2, Transcript, &'a mut Transcript, 64, 128, 56>,
     basis: PedersenBasis<G1, G2>,
     basis_vars: PedersenBasisVars,
 }
 
-impl<G1: AffineRepr> CrossDleqProver<G1> where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
+impl<'a, G1: AffineRepr> CrossDleqProver<'a, G1> where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
         <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
 
-    pub fn new(basis: PedersenBasis<G1, G2>) -> Self {
-        let transcript = Transcript::new(b"DLEQTest");
+    pub fn new(basis: PedersenBasis<G1, G2>, transcript: &'a mut Transcript) -> Self {
         let mut prover = CrossProver::<G1, G2, _, _, 64, 128, 56>::new(b"DLEQProof", transcript);
 
         let B: Vec<BigInt<4>> = (0..4).map(|x| BigInt::from(1u64.into()) << x*64).collect();
@@ -282,19 +282,18 @@ impl<G1: AffineRepr> CrossDleqProver<G1> where BigInt<4>: From<<G1::ScalarField 
 }
 
 /// CrossDleqVerifier is a verifier builder for cross group DLEQ statements.
-pub struct CrossDleqVerifier<G1: AffineRepr>
+pub struct CrossDleqVerifier<'a, G1: AffineRepr>
     where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
         <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
 
-    verifier: CrossVerifier<G1, G2, Transcript, Transcript, 64, 128, 56>,
+    verifier: CrossVerifier<G1, G2, Transcript, &'a mut Transcript, 64, 128, 56>,
     basis_vars: PedersenBasisVars,
 }
 
-impl<G1: AffineRepr> CrossDleqVerifier<G1> where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
+impl<'a, G1: AffineRepr> CrossDleqVerifier<'a, G1> where BigInt<4>: From<<G1::ScalarField as PrimeField>::BigInt>, 
         <G1::ScalarField as PrimeField>::BigInt: From<BigInt<4>> {
 
-    pub fn new(basis: PedersenBasis<G1, G2>) -> Self {
-        let transcript = Transcript::new(b"DLEQTest");
+    pub fn new(basis: PedersenBasis<G1, G2>, transcript: &'a mut Transcript) -> Self {
         let mut verifier = CrossVerifier::<G1, G2, _, _, 64, 128, 56>::new(b"DLEQProof", transcript);
 
         let B: Vec<BigInt<4>> = (0..4).map(|x| BigInt::from(1u64.into()) << x*64).collect();

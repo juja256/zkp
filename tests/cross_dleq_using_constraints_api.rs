@@ -32,6 +32,8 @@ use zkp::toolbox::cross_dleq::{CrossDleqProver, CrossDLEQProof, CrossDleqVerifie
 #[test]
 #[cfg(feature="rangeproof")]
 fn cross_zkp() {
+    use zkp::Transcript;
+
     let B: Vec<BigInt<4>> = (0..4).map(|x| BigInt::from(1u64) << x*64).collect();
     let mut blinding_rng = rand::thread_rng();
     let G_1 = G1Affine::generator();
@@ -40,8 +42,8 @@ fn cross_zkp() {
     let H_2 = G2::rand(&mut thread_rng());
 
     let basis = PedersenBasis::new(G_1, H_1, G_2, H_2);
-
-    let mut prover = CrossDleqProver::<G1Affine>::new(basis.clone());
+    let mut prover_transcript = Transcript::new(b"DLEQTest");
+    let mut prover = CrossDleqProver::<G1Affine>::new(basis.clone(), &mut prover_transcript);
 
     for i in 0..8 {
         use rand::Rng as _;
@@ -55,7 +57,8 @@ fn cross_zkp() {
     let proof_bytes = proof.to_bytes().unwrap();
     let proof_deserialized = CrossDLEQProof::<G1Affine>::from_bytes(&proof_bytes).unwrap();
     println!("{}", proof_bytes.len());
-    let mut verifier = CrossDleqVerifier::<G1Affine>::new(basis);
+    let mut verifier_transcript = Transcript::new(b"DLEQTest");
+    let mut verifier = CrossDleqVerifier::<G1Affine>::new(basis, &mut verifier_transcript);
     for Com in proof_deserialized.commitments {
         
         /*let C = <G2 as AffineRepr>::Group::msm(
