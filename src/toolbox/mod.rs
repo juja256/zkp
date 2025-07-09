@@ -56,7 +56,6 @@ use ark_ec::AffineRepr;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, Compress, SerializationError};
 use merlin::TranscriptRngBuilder;
 use rand::Rng;
-use crate::ark_ff::BigInteger;
 
 use crate::{ProofError, Transcript};
 
@@ -276,7 +275,7 @@ pub trait SchnorrCS {
 
 pub mod standard_transcript{
     use ark_ec::AffineRepr;
-    use ark_ff::{Field};
+    use ark_ff::{Field, PrimeField};
     use merlin::{Transcript, TranscriptRngBuilder};
 
     use crate::ProofError;
@@ -417,7 +416,7 @@ pub mod standard_transcript{
         fn get_challenge(&mut self, label: &'static [u8]) -> G::ScalarField {
             let mut bytes = [0; 64];
             self.challenge_bytes(label, &mut bytes);
-            G::ScalarField::from_random_bytes(&bytes).unwrap()
+            G::ScalarField::from_le_bytes_mod_order(&bytes)
         }
     }
 
